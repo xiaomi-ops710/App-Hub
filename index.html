@@ -163,11 +163,8 @@
             },
             async save(app) {
                 const base = this.getUrl();
-                const res = await fetch(base, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({ action: 'save', app })
-                });
+                const url = `${base}?action=save&data=${encodeURIComponent(JSON.stringify(app))}`;
+                const res = await fetch(url);
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
@@ -175,11 +172,8 @@
             },
             async remove(id) {
                 const base = this.getUrl();
-                const res = await fetch(base, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({ action: 'delete', id })
-                });
+                const url = `${base}?action=delete&id=${encodeURIComponent(id)}`;
+                const res = await fetch(url);
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
@@ -386,9 +380,9 @@
                 return () => window.removeEventListener('keydown', handleKeyDown);
             }, [isModalOpen]);
 
-            const showToast = (msg) => {
+            const showToast = (msg, duration) => {
                 setToastMessage(msg);
-                setTimeout(() => setToastMessage(null), 3000);
+                setTimeout(() => setToastMessage(null), duration || 3000);
             };
 
             const syncFromCloud = async (silent) => {
@@ -484,7 +478,7 @@
                     return next;
                 });
                 if (CloudApi.isEnabled() && updated) {
-                    CloudApi.save(updated).catch(() => showToast('お気に入りのクラウド同期に失敗しました'));
+                    CloudApi.save(updated).catch((err) => showToast(`お気に入りの同期に失敗: ${err.message}`, 5000));
                 }
             };
 
@@ -495,7 +489,7 @@
                     showToast('アプリを削除しました');
                     if (isModalOpen) setIsModalOpen(false);
                     if (CloudApi.isEnabled()) {
-                        CloudApi.remove(id).catch(() => showToast('削除のクラウド同期に失敗しました'));
+                        CloudApi.remove(id).catch((err) => showToast(`削除の同期に失敗: ${err.message}`, 5000));
                     }
                 }
             };
@@ -519,7 +513,7 @@
                 setIsModalOpen(false);
                 setEditingApp(null);
                 if (CloudApi.isEnabled()) {
-                    CloudApi.save(savedApp).catch(() => showToast('クラウドへの同期に失敗しました'));
+                    CloudApi.save(savedApp).catch((err) => showToast(`クラウド同期に失敗: ${err.message}（設定を確認してください）`, 6000));
                 }
             };
 
@@ -1017,8 +1011,11 @@
 // 4. 右上「デプロイ」>「新しいデプロイ」>種類「ウェブアプリ」
 //    実行ユーザー:自分 / アクセス:全員 でデプロイし、発行された.../exec のURLを
 //    アプリの「同期設定」に貼り付ける
-// ※ このスクリプトをスプレッドシートに紐づけて作成すれば(手順2の方法)、
-//   IDなどの設定は一切不要です。初回アクセス時に自動でシートと見出し行を作成します。
+// ※ コードを直した後は、必ず「デプロイ」>「デプロイを管理」>編集(鉛筆)>
+//    「バージョン」を「新バージョン」にして「デプロイ」を押し直してください。
+//    保存しただけでは、既存の公開URLには反映されません（これが一番の詰まりどころです）。
+// ※ すべてGET通信のみで実装しています（ブラウザからGASへPOSTすると
+//    リダイレクト時にCORSでブロックされ書き込みが失敗することがあるための回避策です）。
 
 const SHEET_NAME = 'Apps';
 const HEADERS = ['id', 'title', 'url', 'description', 'category', 'iconType', 'imageUrl', 'isFavorite', 'createdAt'];
@@ -1037,10 +1034,21 @@ function jsonOut_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
+function findRow_(sheet, id) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+  const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) return i + 2; // 1-indexed + header row
+  }
+  return -1;
+}
+
 function doGet(e) {
   const action = (e.parameter && e.parameter.action) || 'list';
+  const sheet = getSheet_();
+
   if (action === 'list') {
-    const sheet = getSheet_();
     const values = sheet.getDataRange().getValues();
     const headers = values.shift();
     const apps = values
@@ -1054,24 +1062,10 @@ function doGet(e) {
       });
     return jsonOut_({ apps: apps });
   }
-  return jsonOut_({ error: 'unknown action' });
-}
 
-function findRow_(sheet, id) {
-  const ids = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 0), 1).getValues();
-  for (let i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(id)) return i + 2; // 1-indexed + header row
-  }
-  return -1;
-}
-
-function doPost(e) {
-  try {
-    const body = JSON.parse(e.postData.contents);
-    const sheet = getSheet_();
-
-    if (body.action === 'save') {
-      const app = body.app || {};
+  if (action === 'save') {
+    try {
+      const app = JSON.parse(e.parameter.data || '{}');
       const id = app.id || Utilities.getUuid();
       const createdAt = app.createdAt || Date.now();
       const row = HEADERS.map(h => {
@@ -1087,30 +1081,64 @@ function doPost(e) {
         sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
       }
       return jsonOut_({ success: true, id: id });
+    } catch (err) {
+      return jsonOut_({ error: String(err) });
     }
+  }
 
-    if (body.action === 'delete') {
-      const rowIndex = findRow_(sheet, body.id);
+  if (action === 'delete') {
+    try {
+      const rowIndex = findRow_(sheet, e.parameter.id);
       if (rowIndex !== -1) sheet.deleteRow(rowIndex);
       return jsonOut_({ success: true });
+    } catch (err) {
+      return jsonOut_({ error: String(err) });
     }
-
-    return jsonOut_({ error: 'unknown action' });
-  } catch (err) {
-    return jsonOut_({ error: String(err) });
   }
+
+  return jsonOut_({ error: 'unknown action' });
 }`;
 
         function SyncSettingsModal({ currentUrl, onClose, onSave }) {
             const [url, setUrl] = useState(currentUrl || '');
             const [showCode, setShowCode] = useState(false);
             const [copied, setCopied] = useState(false);
+            const [testState, setTestState] = useState('idle'); // idle | testing | success | error
+            const [testMessage, setTestMessage] = useState('');
 
             const handleCopyCode = () => {
                 navigator.clipboard?.writeText(GAS_CODE_SNIPPET).then(() => {
                     setCopied(true);
                     setTimeout(() => setCopied(false), 2000);
                 });
+            };
+
+            const handleTestConnection = async () => {
+                const trimmed = url.trim();
+                if (!trimmed) {
+                    setTestState('error');
+                    setTestMessage('URLを入力してください');
+                    return;
+                }
+                setTestState('testing');
+                setTestMessage('');
+                try {
+                    const res = await fetch(`${trimmed}?action=list`);
+                    const text = await res.text();
+                    if (!res.ok) throw new Error(`HTTPエラー ${res.status}`);
+                    let data;
+                    try {
+                        data = JSON.parse(text);
+                    } catch (e) {
+                        throw new Error('JSONとして解析できない応答が返ってきました（ログイン画面などが返っている可能性があります。アクセス設定が「全員」になっているか確認してください）');
+                    }
+                    if (data.error) throw new Error(data.error);
+                    setTestState('success');
+                    setTestMessage(`接続成功：現在 ${Array.isArray(data.apps) ? data.apps.length : 0} 件のアプリがスプレッドシートに保存されています。`);
+                } catch (err) {
+                    setTestState('error');
+                    setTestMessage(err.message || String(err));
+                }
             };
 
             return (
@@ -1140,6 +1168,7 @@ function doPost(e) {
                                 <li><span className="text-m3-onSurface font-medium">Apps Scriptを開く</span> — メニューの「拡張機能」▶「Apps Script」を選択。</li>
                                 <li><span className="text-m3-onSurface font-medium">コードを貼り付け</span> — 中身を全部消して、下の「GASコードを表示してコピー」からコードを貼り付けて保存（Ctrl/Cmd+S）。</li>
                                 <li><span className="text-m3-onSurface font-medium">デプロイ</span> — 右上「デプロイ」▶「新しいデプロイ」▶ 種類「ウェブアプリ」。実行ユーザー「自分」、アクセスできるユーザー「全員」で公開し、発行されたURL（.../exec）を下の欄に貼り付けて保存。初回は権限の承認を求められるので許可してください。</li>
+                                <li><span className="text-red-500 font-bold">重要：</span><span className="text-m3-onSurface font-medium">コードを直したら必ず再デプロイ</span> — 一度デプロイした後にコードを修正した場合、「デプロイ」▶「デプロイを管理」▶ 編集(鉛筆アイコン)▶ バージョン「新バージョン」▶「デプロイ」を押さないと、公開中のURLには反映されません。保存されない場合はまずこれを確認してください。</li>
                             </ol>
                             <p className="text-xs text-m3-onSurfaceVariant/80 -mt-2">
                                 ※ Firebaseのようなプロジェクト作成やサービスアカウントの発行は不要です。データは開いたスプレッドシートの「Apps」シートに自動で保存されます。
@@ -1172,13 +1201,32 @@ function doPost(e) {
                                 <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
                                     GAS WebアプリのURL
                                 </label>
-                                <input
-                                    type="url"
-                                    placeholder="https://script.google.com/macros/s/.../exec"
-                                    value={url}
-                                    onChange={(e) => setUrl(e.target.value)}
-                                    className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
-                                />
+                                <div className="flex gap-1.5">
+                                    <input
+                                        type="url"
+                                        placeholder="https://script.google.com/macros/s/.../exec"
+                                        value={url}
+                                        onChange={(e) => setUrl(e.target.value)}
+                                        className="flex-1 min-w-0 px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleTestConnection}
+                                        disabled={testState === 'testing'}
+                                        className="px-3.5 py-2 bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant rounded-m3-l text-xs font-semibold hover:bg-m3-surfaceVariant transition-colors flex items-center gap-1 flex-shrink-0 disabled:opacity-60"
+                                    >
+                                        <span className={`material-symbols-outlined text-base ${testState === 'testing' ? 'animate-spin' : ''}`}>
+                                            {testState === 'testing' ? 'progress_activity' : 'wifi_tethering'}
+                                        </span>
+                                        <span className="hidden sm:inline">接続テスト</span>
+                                    </button>
+                                </div>
+                                {testMessage && (
+                                    <p className={`text-xs mt-1.5 flex items-start gap-1 ${testState === 'success' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                                        <span className="material-symbols-outlined text-sm flex-shrink-0">{testState === 'success' ? 'check_circle' : 'error'}</span>
+                                        <span>{testMessage}</span>
+                                    </p>
+                                )}
                                 <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">
                                     空欄で保存すると、これまでどおり端末内保存のみのモードに戻ります。
                                 </p>
