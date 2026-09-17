@@ -1,0 +1,23 @@
+{
+  "name": "M3 App Hub - 自作WEBアプリリンク集",
+  "short_name": "App Hub",
+  "description": "自作のGAS/GitHub WEBアプリへのリンクをまとめて管理・起動するランチャー",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#F5F7FC",
+  "theme_color": "#0061A4",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
