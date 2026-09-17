@@ -1152,6 +1152,7 @@ function findRow_(sheet, id) {
 }
 
 function doGet(e) {
+  e = e || {}; // エディタで直接「実行」した場合はeが渡らないため、その場合でもエラーにならないようにする
   const action = (e.parameter && e.parameter.action) || 'list';
   const sheet = getSheet_();
 
