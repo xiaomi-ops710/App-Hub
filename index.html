@@ -366,6 +366,7 @@
             const [apiUrl, setApiUrl] = useState(() => CloudApi.getUrl());
             const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error | offline
             const [syncModalOpen, setSyncModalOpen] = useState(false);
+            const [savingOverlay, setSavingOverlay] = useState(false);
 
             useEffect(() => {
                 try { localStorage.setItem(STORAGE_KEY, JSON.stringify(apps)); } catch (e) {}
@@ -516,12 +517,11 @@
                 }
             };
 
-            const handleSaveApp = (appData) => {
+            const handleSaveApp = async (appData) => {
                 let savedApp;
-                if (editingApp && editingApp.id) {
+                const isNew = !(editingApp && editingApp.id);
+                if (!isNew) {
                     savedApp = { ...appData, id: editingApp.id, createdAt: editingApp.createdAt, isFavorite: editingApp.isFavorite };
-                    setApps(prev => prev.map(a => a.id === editingApp.id ? savedApp : a));
-                    showToast('アプリ情報を更新しました');
                 } else {
                     savedApp = {
                         ...appData,
@@ -529,13 +529,38 @@
                         createdAt: Date.now(),
                         isFavorite: false
                     };
-                    setApps(prev => [savedApp, ...prev]);
-                    showToast('新しいアプリを追加しました');
                 }
-                setIsModalOpen(false);
-                setEditingApp(null);
+
                 if (CloudApi.isEnabled()) {
-                    CloudApi.save(savedApp).catch((err) => showToast(`クラウド同期に失敗: ${err.message}（設定を確認してください）`, 6000));
+                    setSavingOverlay(true);
+                    try {
+                        await CloudApi.save(savedApp);
+                        if (isNew) {
+                            setApps(prev => [savedApp, ...prev]);
+                            showToast('新しいアプリを追加し、スプレッドシートに保存しました');
+                        } else {
+                            setApps(prev => prev.map(a => a.id === editingApp.id ? savedApp : a));
+                            showToast('アプリ情報を更新し、スプレッドシートに保存しました');
+                        }
+                        setIsModalOpen(false);
+                        setEditingApp(null);
+                    } catch (err) {
+                        showToast(`スプレッドシートへの保存に失敗しました: ${err.message}（もう一度お試しください）`, 6000);
+                        // 保存に失敗した場合はモーダルを閉じず、入力内容を保持したまま再試行できるようにする
+                    } finally {
+                        setSavingOverlay(false);
+                    }
+                } else {
+                    // 同期未設定の場合は従来どおりローカル保存のみ
+                    if (isNew) {
+                        setApps(prev => [savedApp, ...prev]);
+                        showToast('新しいアプリを追加しました');
+                    } else {
+                        setApps(prev => prev.map(a => a.id === editingApp.id ? savedApp : a));
+                        showToast('アプリ情報を更新しました');
+                    }
+                    setIsModalOpen(false);
+                    setEditingApp(null);
                 }
             };
 
@@ -1040,6 +1065,14 @@
                     >
                         <span className="material-symbols-rounded text-3xl">add</span>
                     </button>
+
+                    {savingOverlay && (
+                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
+                            <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mb-5"></div>
+                            <p className="text-white text-base font-bold">スプレッドシートに保存中...</p>
+                            <p className="text-white/70 text-xs mt-1.5">保存が完了するまでこのまま少々お待ちください</p>
+                        </div>
+                    )}
 
                     {syncModalOpen && (
                         <SyncSettingsModal
