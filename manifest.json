@@ -1,6 +1,6 @@
 {
-  "name": "M3 App Hub - 自作WEBアプリリンク集",
-  "short_name": "App Hub",
+  "name": "アプリハブ - 自作WEBアプリリンク集",
+  "short_name": "アプリハブ",
   "description": "自作のGAS/GitHub WEBアプリへのリンクをまとめて管理・起動するランチャー",
   "start_url": ".",
   "display": "standalone",
