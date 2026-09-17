@@ -1118,6 +1118,7 @@
 
 const SHEET_NAME = 'Apps';
 const HEADERS = ['id', 'title', 'url', 'editUrl', 'description', 'category', 'iconType', 'imageUrl', 'iconName', 'isFavorite', 'createdAt'];
+const CODE_VERSION = 'v3-get-only-2026-09'; // コードが最新かどうか確認するための目印（接続テストで表示されます）
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1168,7 +1169,7 @@ function doGet(e) {
         obj.createdAt = Number(obj.createdAt) || Date.now();
         return obj;
       });
-    return jsonOut_({ apps: apps });
+    return jsonOut_({ apps: apps, version: CODE_VERSION });
   }
 
   if (action === 'save') {
@@ -1204,7 +1205,7 @@ function doGet(e) {
     }
   }
 
-  return jsonOut_({ error: 'unknown action' });
+  return jsonOut_({ error: 'unknown action: ' + JSON.stringify(action) + ' (受け取ったパラメータ: ' + JSON.stringify(e.parameter) + ')' });
 }`;
 
         function SyncSettingsModal({ currentUrl, onClose, onSave }) {
@@ -1242,7 +1243,7 @@ function doGet(e) {
                     }
                     if (data.error) throw new Error(data.error);
                     setTestState('success');
-                    setTestMessage(`接続成功：現在 ${Array.isArray(data.apps) ? data.apps.length : 0} 件のアプリがスプレッドシートに保存されています。`);
+                    setTestMessage(`接続成功：現在 ${Array.isArray(data.apps) ? data.apps.length : 0} 件のアプリが保存されています。（GASコードのバージョン: ${data.version || '不明・古いコードの可能性があります'}）`);
                 } catch (err) {
                     setTestState('error');
                     setTestMessage(err.message || String(err));
