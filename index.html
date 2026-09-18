@@ -55,6 +55,7 @@
                         'm3-l': '16px',
                         'm3-xl': '24px',
                         'm3-2xl': '28px',
+                        'm3-3xl': '32px',
                         'm3-full': '9999px'
                     }
                 }
@@ -103,10 +104,13 @@
         }
 
         .m3-card {
-            transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.2s cubic-bezier(0.2, 0, 0, 1), background-color 0.2s ease;
+            transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease, background-color 0.2s ease;
         }
         .m3-card:hover {
-            transform: translateY(-3px);
+            transform: translateY(-4px) scale(1.015);
+        }
+        .m3-card:active {
+            transform: translateY(-1px) scale(0.98);
         }
         .material-symbols-rounded {
             font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
@@ -125,6 +129,14 @@
         .animate-slide-up { animation: slideUp 0.2s cubic-bezier(0.2,0,0,1); }
         @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
         .animate-toast { animation: toastIn 0.25s cubic-bezier(0.2,0,0,1); }
+
+        /* Material 3 Expressive: バネのような弾む動き */
+        .m3-bounce {
+            transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+        }
+        .m3-bounce:active {
+            transform: scale(0.9);
+        }
     </style>
 </head>
 <body>
@@ -319,9 +331,38 @@
             return str.split(/[,、]/).map(s => s.trim()).filter(Boolean);
         };
 
+        // カテゴリ名に応じて彩り豊かなチップ配色を割り当てる（Material 3 Expressiveのカラフルな表現に寄せる）
+        const CATEGORY_PALETTE = [
+            'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+            'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
+            'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+            'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
+            'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300',
+            'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300',
+            'bg-pink-100 text-pink-800 dark:bg-pink-900/40 dark:text-pink-300',
+        ];
+        const categoryColor = (tag) => {
+            let hash = 0;
+            for (let i = 0; i < tag.length; i++) hash = (hash * 31 + tag.charCodeAt(i)) >>> 0;
+            return CATEGORY_PALETTE[hash % CATEGORY_PALETTE.length];
+        };
+
         const formatDate = (ts) => {
             const d = new Date(ts);
             return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+        };
+
+        const formatRelative = (ts) => {
+            if (!ts) return '未使用';
+            const diffMs = Date.now() - ts;
+            const diffMin = Math.floor(diffMs / 60000);
+            if (diffMin < 1) return 'たった今';
+            if (diffMin < 60) return `${diffMin}分前`;
+            const diffHour = Math.floor(diffMin / 60);
+            if (diffHour < 24) return `${diffHour}時間前`;
+            const diffDay = Math.floor(diffHour / 24);
+            if (diffDay < 30) return `${diffDay}日前`;
+            return formatDate(ts);
         };
 
         // カードサイズ設定：グリッドの最小幅・アイコンサイズ・余白・説明文の行数を切り替える
@@ -367,6 +408,7 @@
             const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error | offline
             const [syncModalOpen, setSyncModalOpen] = useState(false);
             const [savingOverlay, setSavingOverlay] = useState(false);
+            const [qrApp, setQrApp] = useState(null);
 
             useEffect(() => {
                 try { localStorage.setItem(STORAGE_KEY, JSON.stringify(apps)); } catch (e) {}
@@ -393,11 +435,18 @@
                             e.preventDefault();
                             searchInputRef.current?.focus();
                         }
+                    } else if ((e.key === 'n' || e.key === 'N') && !isModalOpen && !syncModalOpen) {
+                        const tag = document.activeElement?.tagName;
+                        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+                            e.preventDefault();
+                            setEditingApp(null);
+                            setIsModalOpen(true);
+                        }
                     }
                 };
                 window.addEventListener('keydown', handleKeyDown);
                 return () => window.removeEventListener('keydown', handleKeyDown);
-            }, [isModalOpen]);
+            }, [isModalOpen, syncModalOpen]);
 
             useEffect(() => {
                 try { localStorage.setItem('m3_app_hub_card_size', cardSize); } catch (e) {}
@@ -478,6 +527,9 @@
                     case 'az':
                         list.sort((a, b) => a.title.localeCompare(b.title, 'ja'));
                         break;
+                    case 'recent':
+                        list.sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+                        break;
                     default: // smart: favorites first, then newest
                         list.sort((a, b) => (b.isFavorite ? 1 : 0) - (a.isFavorite ? 1 : 0) || b.createdAt - a.createdAt);
                 }
@@ -492,16 +544,37 @@
                 setFavoritesOnly(false);
             };
 
-            const handleToggleFavorite = (id, e) => {
+            const handleToggleFavorite = async (id, e) => {
                 if (e) e.stopPropagation();
-                let updated;
+                let updated, previous;
                 setApps(prev => {
-                    const next = prev.map(a => a.id === id ? { ...a, isFavorite: !a.isFavorite } : a);
-                    updated = next.find(a => a.id === id);
+                    const next = prev.map(a => {
+                        if (a.id === id) {
+                            previous = a;
+                            updated = { ...a, isFavorite: !a.isFavorite };
+                            return updated;
+                        }
+                        return a;
+                    });
                     return next;
                 });
                 if (CloudApi.isEnabled() && updated) {
-                    CloudApi.save(updated).catch((err) => showToast(`お気に入りの同期に失敗: ${err.message}`, 5000));
+                    try {
+                        await CloudApi.save(updated);
+                    } catch (err) {
+                        // 同期に失敗した場合は表示上も元に戻し、状態の食い違いを防ぐ
+                        setApps(prev => prev.map(a => a.id === id ? previous : a));
+                        showToast(`お気に入りの同期に失敗: ${err.message}`, 5000);
+                    }
+                }
+            };
+
+            const handleOpenApp = (app) => {
+                window.open(app.url, '_blank', 'noopener,noreferrer');
+                const now = Date.now();
+                setApps(prev => prev.map(a => a.id === app.id ? { ...a, lastOpenedAt: now } : a));
+                if (CloudApi.isEnabled()) {
+                    CloudApi.save({ ...app, lastOpenedAt: now }).catch(() => {});
                 }
             };
 
@@ -630,13 +703,15 @@
                                 title: d.title || '(無題)',
                                 url: d.url,
                                 editUrl: d.editUrl || '',
+                                version: d.version || '',
                                 description: d.description || '',
                                 iconType: ['gas', 'github', 'image', 'default', 'material'].includes(d.iconType) ? d.iconType : 'default',
                                 imageUrl: d.imageUrl || '',
                                 iconName: d.iconName || '',
                                 category: d.category || 'その他',
                                 isFavorite: !!d.isFavorite,
-                                createdAt: d.createdAt || Date.now()
+                                createdAt: d.createdAt || Date.now(),
+                                lastOpenedAt: d.lastOpenedAt || 0
                             }));
                         if (cleaned.length === 0) {
                             showToast('有効なアプリデータが見つかりませんでした');
@@ -663,7 +738,7 @@
                                     <span className="material-symbols-rounded text-2xl">grid_view</span>
                                 </div>
                                 <div>
-                                    <h1 className="text-xl font-bold text-m3-onSurface leading-tight tracking-wide">アプリハブ</h1>
+                                    <h1 className="text-2xl font-extrabold text-m3-onSurface leading-tight tracking-tight">アプリハブ</h1>
                                     <p className="text-xs text-m3-onSurfaceVariant">自作WEBアプリ リンクギャラリー・{apps.length}件登録中</p>
                                 </div>
                             </div>
@@ -713,7 +788,7 @@
                                 </button>
                                 <button
                                     onClick={openAddModal}
-                                    className="hidden sm:flex items-center gap-2 px-5 py-2.5 bg-m3-primary text-m3-onPrimary rounded-m3-full font-medium hover:shadow-md active:scale-95 transition-all"
+                                    className="hidden sm:flex items-center gap-2 px-5 py-2.5 bg-m3-primary text-m3-onPrimary rounded-m3-full font-medium hover:shadow-md m3-bounce"
                                 >
                                     <span className="material-symbols-rounded text-xl">add</span>
                                     <span>アプリ追加</span>
@@ -759,6 +834,7 @@
                                         <option value="newest">新しい順</option>
                                         <option value="oldest">古い順</option>
                                         <option value="az">名前順 (A-Z/あ-ん)</option>
+                                        <option value="recent">最近使った順</option>
                                     </select>
                                     <span className="material-symbols-rounded absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-m3-onSurfaceVariant text-lg">unfold_more</span>
                                 </div>
@@ -910,8 +986,8 @@
                                 {filteredApps.map((app) => (
                                     <div
                                         key={app.id}
-                                        onClick={() => window.open(app.url, '_blank', 'noopener,noreferrer')}
-                                        className={`m3-card group relative flex flex-col justify-between bg-m3-surfaceContainer rounded-m3-2xl ${CARD_SIZE_CONFIG[cardSize].padding} cursor-pointer hover:bg-m3-surfaceContainerHigh hover:shadow-lg transition-all`}
+                                        onClick={() => handleOpenApp(app)}
+                                        className={`m3-card group relative flex flex-col justify-between bg-m3-surfaceContainer rounded-m3-3xl ${CARD_SIZE_CONFIG[cardSize].padding} cursor-pointer hover:bg-m3-surfaceContainerHigh hover:shadow-lg transition-all`}
                                     >
                                         <div>
                                             <div className="flex items-start justify-between gap-3 mb-3">
@@ -919,7 +995,7 @@
                                                 <div className="flex items-center gap-1">
                                                     <button
                                                         onClick={(e) => handleToggleFavorite(app.id, e)}
-                                                        className="p-1.5 text-m3-onSurfaceVariant hover:text-amber-500 rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                        className="p-1.5 text-m3-onSurfaceVariant hover:text-amber-500 rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors m3-bounce"
                                                         title={app.isFavorite ? "お気に入りから解除" : "お気に入りに追加"}
                                                     >
                                                         <span className={`material-symbols-rounded text-xl ${app.isFavorite ? 'fill text-amber-500' : ''}`}>star</span>
@@ -938,7 +1014,7 @@
                                             <div className="mb-2">
                                                 <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
                                                     {splitCategories(app.category).map(tag => (
-                                                        <span key={tag} className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-m3-s bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant">
+                                                        <span key={tag} className={`text-[10px] font-bold px-2.5 py-0.5 rounded-m3-s ${categoryColor(tag)}`}>
                                                             {tag}
                                                         </span>
                                                     ))}
@@ -949,9 +1025,16 @@
                                                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-m3-s bg-gray-800 text-gray-100">GitHub</span>
                                                     )}
                                                 </div>
-                                                <h2 className={`font-bold text-m3-onSurface ${CARD_SIZE_CONFIG[cardSize].titleSize} group-hover:text-m3-primary transition-colors line-clamp-1`}>
-                                                    {app.title}
-                                                </h2>
+                                                <div className="flex items-center gap-1.5">
+                                                    <h2 className={`font-bold text-m3-onSurface ${CARD_SIZE_CONFIG[cardSize].titleSize} group-hover:text-m3-primary transition-colors line-clamp-1`}>
+                                                        {app.title}
+                                                    </h2>
+                                                    {app.version && (
+                                                        <span className="flex-shrink-0 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-m3-s bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant">
+                                                            v{app.version}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
 
                                             <p className={`text-xs text-m3-onSurfaceVariant ${CARD_SIZE_CONFIG[cardSize].descLines} mb-4 leading-relaxed`}>
@@ -979,10 +1062,17 @@
                                                         <span className="hidden sm:inline">編集</span>
                                                     </button>
                                                 )}
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); setQrApp(app); }}
+                                                    className="inline-flex items-center gap-1 hover:text-m3-primary py-1 px-2 rounded-m3-s hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    title="QRコードを表示"
+                                                >
+                                                    <span className="material-symbols-rounded text-sm">qr_code_2</span>
+                                                </button>
                                             </div>
                                             <button
-                                                onClick={(e) => { e.stopPropagation(); window.open(app.url, '_blank', 'noopener,noreferrer'); }}
-                                                className="inline-flex items-center gap-1.5 font-semibold text-m3-onPrimaryContainer bg-m3-primaryContainer px-4 py-2 rounded-m3-full hover:bg-m3-primary hover:text-m3-onPrimary hover:shadow-md active:scale-95 transition-all"
+                                                onClick={(e) => { e.stopPropagation(); handleOpenApp(app); }}
+                                                className="inline-flex items-center gap-1.5 font-semibold text-m3-onPrimaryContainer bg-m3-primaryContainer px-4 py-2 rounded-m3-full hover:bg-m3-primary hover:text-m3-onPrimary hover:shadow-md m3-bounce"
                                             >
                                                 <span>開く</span>
                                                 <span className="material-symbols-rounded text-base">open_in_new</span>
@@ -996,7 +1086,7 @@
                                 {filteredApps.map((app) => (
                                     <div
                                         key={app.id}
-                                        onClick={() => window.open(app.url, '_blank', 'noopener,noreferrer')}
+                                        onClick={() => handleOpenApp(app)}
                                         className="m3-card group flex items-center justify-between bg-m3-surfaceContainer rounded-m3-xl p-4 cursor-pointer hover:bg-m3-surfaceContainerHigh hover:shadow-md transition-all gap-4"
                                     >
                                         <div className="flex items-center gap-3.5 min-w-0 flex-1">
@@ -1006,8 +1096,13 @@
                                                     <h2 className="font-bold text-m3-onSurface text-sm sm:text-base group-hover:text-m3-primary transition-colors truncate">
                                                         {app.title}
                                                     </h2>
+                                                    {app.version && (
+                                                        <span className="flex-shrink-0 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-m3-s bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant">
+                                                            v{app.version}
+                                                        </span>
+                                                    )}
                                                     {splitCategories(app.category).slice(0, 2).map(tag => (
-                                                        <span key={tag} className="hidden sm:inline-block text-[10px] font-bold tracking-wider px-2 py-0.5 rounded-m3-s bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant flex-shrink-0">
+                                                        <span key={tag} className={`hidden sm:inline-block text-[10px] font-bold px-2 py-0.5 rounded-m3-s flex-shrink-0 ${categoryColor(tag)}`}>
                                                             {tag}
                                                         </span>
                                                     ))}
@@ -1016,7 +1111,10 @@
                                                     {app.description || app.url}
                                                 </p>
                                             </div>
-                                            <span className="hidden lg:block text-[11px] text-m3-onSurfaceVariant/70 flex-shrink-0">{formatDate(app.createdAt)}</span>
+                                            <span className="hidden lg:flex flex-col items-end text-[11px] text-m3-onSurfaceVariant/70 flex-shrink-0 leading-tight">
+                                                <span>{formatRelative(app.lastOpenedAt)}</span>
+                                                <span className="opacity-60">登録: {formatDate(app.createdAt)}</span>
+                                            </span>
                                         </div>
 
                                         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1037,8 +1135,15 @@
                                                 </button>
                                             )}
                                             <button
+                                                onClick={(e) => { e.stopPropagation(); setQrApp(app); }}
+                                                className="p-2 text-m3-onSurfaceVariant hover:text-m3-primary rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                title="QRコードを表示"
+                                            >
+                                                <span className="material-symbols-rounded text-lg">qr_code_2</span>
+                                            </button>
+                                            <button
                                                 onClick={(e) => handleToggleFavorite(app.id, e)}
-                                                className="p-2 text-m3-onSurfaceVariant hover:text-amber-500 rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                className="p-2 text-m3-onSurfaceVariant hover:text-amber-500 rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors m3-bounce"
                                                 title={app.isFavorite ? "お気に入り解除" : "お気に入り追加"}
                                             >
                                                 <span className={`material-symbols-rounded text-lg ${app.isFavorite ? 'fill text-amber-500' : ''}`}>star</span>
@@ -1060,11 +1165,15 @@
 
                     <button
                         onClick={openAddModal}
-                        className="sm:hidden fixed bottom-6 right-6 z-30 w-14 h-14 bg-m3-primaryContainer text-m3-onPrimaryContainer rounded-m3-2xl shadow-lg flex items-center justify-center hover:scale-105 active:scale-95 transition-all"
+                        className="fixed bottom-6 right-6 z-30 w-16 h-16 bg-m3-primaryContainer text-m3-onPrimaryContainer rounded-m3-3xl shadow-xl flex items-center justify-center hover:shadow-2xl hover:-translate-y-0.5 m3-bounce"
                         aria-label="アプリを追加"
                     >
                         <span className="material-symbols-rounded text-3xl">add</span>
                     </button>
+
+                    {qrApp && (
+                        <QrModal app={qrApp} onClose={() => setQrApp(null)} />
+                    )}
 
                     {savingOverlay && (
                         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
@@ -1117,8 +1226,8 @@
 //    リダイレクト時にCORSでブロックされ書き込みが失敗することがあるための回避策です）。
 
 const SHEET_NAME = 'Apps';
-const HEADERS = ['id', 'title', 'url', 'editUrl', 'description', 'category', 'iconType', 'imageUrl', 'iconName', 'isFavorite', 'createdAt'];
-const CODE_VERSION = 'v3-get-only-2026-09'; // コードが最新かどうか確認するための目印（接続テストで表示されます）
+const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'description', 'category', 'iconType', 'imageUrl', 'iconName', 'isFavorite', 'createdAt', 'lastOpenedAt'];
+const CODE_VERSION = 'v4-favorites-version-lastopened-2026-09';
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1167,6 +1276,7 @@ function doGet(e) {
         headers.forEach((h, i) => { obj[h] = row[i]; });
         obj.isFavorite = (obj.isFavorite === true || String(obj.isFavorite).toLowerCase() === 'true');
         obj.createdAt = Number(obj.createdAt) || Date.now();
+        obj.lastOpenedAt = Number(obj.lastOpenedAt) || 0;
         return obj;
       });
     return jsonOut_({ apps: apps, version: CODE_VERSION });
@@ -1207,6 +1317,29 @@ function doGet(e) {
 
   return jsonOut_({ error: 'unknown action: ' + JSON.stringify(action) + ' (受け取ったパラメータ: ' + JSON.stringify(e.parameter) + ')' });
 }`;
+
+        function QrModal({ app, onClose }) {
+            const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(app.url)}`;
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
+                    <div
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-xs rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col items-center p-6 animate-slide-up"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="w-full flex items-center justify-between mb-4">
+                            <h2 className="text-sm font-bold truncate pr-2">{app.title}</h2>
+                            <button onClick={onClose} className="p-1 rounded-m3-full hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant flex-shrink-0" title="閉じる">
+                                <span className="material-symbols-rounded">close</span>
+                            </button>
+                        </div>
+                        <div className="bg-white p-3 rounded-m3-l shadow-sm">
+                            <img src={qrSrc} alt="QR Code" width={220} height={220} />
+                        </div>
+                        <p className="text-[11px] text-m3-onSurfaceVariant mt-3 text-center">スマホのカメラで読み取ると、このアプリをすぐに開けます。</p>
+                    </div>
+                </div>
+            );
+        }
 
         function SyncSettingsModal({ currentUrl, onClose, onSave }) {
             const [url, setUrl] = useState(currentUrl || '');
@@ -1253,7 +1386,7 @@ function doGet(e) {
             return (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
                     <div
-                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-xl rounded-m3-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-xl rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="px-6 py-4.5 bg-m3-surfaceContainerHighest flex items-center justify-between">
@@ -1357,7 +1490,7 @@ function doGet(e) {
                                 <button
                                     type="button"
                                     onClick={() => onSave(url.trim())}
-                                    className="px-6 py-2.5 bg-m3-primary text-m3-onPrimary font-medium text-sm rounded-m3-full hover:shadow-md transition-all active:scale-95"
+                                    className="px-6 py-2.5 bg-m3-primary text-m3-onPrimary font-medium text-sm rounded-m3-full hover:shadow-md m3-bounce"
                                 >
                                     保存して同期
                                 </button>
@@ -1383,6 +1516,7 @@ function doGet(e) {
             const [title, setTitle] = useState(editingApp?.title || '');
             const [url, setUrl] = useState(editingApp?.url || '');
             const [editUrl, setEditUrl] = useState(editingApp?.editUrl || '');
+            const [version, setVersion] = useState(editingApp?.version || '');
             const [description, setDescription] = useState(editingApp?.description || '');
             const [category, setCategory] = useState(editingApp?.category || '');
             const [iconType, setIconType] = useState(editingApp?.iconType || 'gas');
@@ -1431,6 +1565,7 @@ function doGet(e) {
                     title: title.trim(),
                     url: url.trim(),
                     editUrl: editUrl.trim(),
+                    version: version.trim(),
                     description: description.trim(),
                     category: category.trim() || 'その他',
                     iconType,
@@ -1468,7 +1603,7 @@ function doGet(e) {
                     onClick={onClose}
                 >
                     <div
-                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="px-6 py-4.5 bg-m3-surfaceContainerHighest flex items-center justify-between">
@@ -1645,19 +1780,33 @@ function doGet(e) {
                                 )}
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
-                                    カテゴリ / タグ
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="例: 自動化, 開発ツール, ポートフォリオ"
-                                    value={category}
-                                    onChange={(e) => setCategory(e.target.value)}
-                                    className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
-                                />
-                                <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ カンマ区切りで複数のタグを設定できます。</p>
+                            <div className="grid grid-cols-3 gap-3">
+                                <div className="col-span-2">
+                                    <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
+                                        カテゴリ / タグ
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="例: 自動化, 開発ツール"
+                                        value={category}
+                                        onChange={(e) => setCategory(e.target.value)}
+                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
+                                        バージョン
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="1.2.0"
+                                        value={version}
+                                        onChange={(e) => setVersion(e.target.value)}
+                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
+                                    />
+                                </div>
                             </div>
+                            <p className="text-[11px] text-m3-onSurfaceVariant/80 -mt-3">※ カテゴリはカンマ区切りで複数設定できます。バージョンは任意（例: 1.0.0）。</p>
 
                             <div>
                                 <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
@@ -1717,7 +1866,7 @@ function doGet(e) {
                                     <button type="button" onClick={onClose} className="px-5 py-2.5 text-m3-onSurfaceVariant font-medium text-sm rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors">
                                         キャンセル
                                     </button>
-                                    <button type="submit" className="px-6 py-2.5 bg-m3-primary text-m3-onPrimary font-medium text-sm rounded-m3-full hover:shadow-md transition-all active:scale-95">
+                                    <button type="submit" className="px-6 py-2.5 bg-m3-primary text-m3-onPrimary font-medium text-sm rounded-m3-full hover:shadow-md m3-bounce">
                                         {editingApp?.id ? '更新を保存' : '登録する'}
                                     </button>
                                 </div>
