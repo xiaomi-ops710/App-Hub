@@ -347,6 +347,9 @@
             return CATEGORY_PALETTE[hash % CATEGORY_PALETTE.length];
         };
 
+        // platform未設定の既存データはiconTypeから推定してタグ表示の後方互換を保つ
+        const getPlatform = (app) => app.platform || (['gas', 'github'].includes(app.iconType) ? app.iconType : '');
+
         const formatDate = (ts) => {
             const d = new Date(ts);
             return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
@@ -704,6 +707,7 @@
                                 url: d.url,
                                 editUrl: d.editUrl || '',
                                 version: d.version || '',
+                                platform: ['gas', 'github'].includes(d.platform) ? d.platform : '',
                                 description: d.description || '',
                                 iconType: ['gas', 'github', 'image', 'default', 'material'].includes(d.iconType) ? d.iconType : 'default',
                                 imageUrl: d.imageUrl || '',
@@ -1018,14 +1022,16 @@
                                                             {tag}
                                                         </span>
                                                     ))}
-                                                    {app.iconType === 'gas' && (
+                                                    {getPlatform(app) === 'gas' && (
                                                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-m3-s bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300">GAS</span>
                                                     )}
-                                                    {app.iconType === 'github' && (
+                                                    {getPlatform(app) === 'github' && (
                                                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-m3-s bg-gray-800 text-gray-100">GitHub</span>
                                                     )}
                                                 </div>
                                                 <div className="flex items-center gap-1.5">
+                                                    {getPlatform(app) === 'gas' && <GasIcon className="w-4 h-4 flex-shrink-0" />}
+                                                    {getPlatform(app) === 'github' && <GithubIcon className="w-4 h-4 flex-shrink-0 text-m3-onSurface" />}
                                                     <h2 className={`font-bold text-m3-onSurface ${CARD_SIZE_CONFIG[cardSize].titleSize} group-hover:text-m3-primary transition-colors line-clamp-1`}>
                                                         {app.title}
                                                     </h2>
@@ -1093,6 +1099,8 @@
                                             <AppIconDisplay type={app.iconType} imageUrl={app.imageUrl} iconName={app.iconName} size="sm" />
                                             <div className="min-w-0 flex-1">
                                                 <div className="flex items-center gap-2">
+                                                    {getPlatform(app) === 'gas' && <GasIcon className="w-4 h-4 flex-shrink-0" />}
+                                                    {getPlatform(app) === 'github' && <GithubIcon className="w-4 h-4 flex-shrink-0 text-m3-onSurface" />}
                                                     <h2 className="font-bold text-m3-onSurface text-sm sm:text-base group-hover:text-m3-primary transition-colors truncate">
                                                         {app.title}
                                                     </h2>
@@ -1226,8 +1234,8 @@
 //    リダイレクト時にCORSでブロックされ書き込みが失敗することがあるための回避策です）。
 
 const SHEET_NAME = 'Apps';
-const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'description', 'category', 'iconType', 'imageUrl', 'iconName', 'isFavorite', 'createdAt', 'lastOpenedAt'];
-const CODE_VERSION = 'v4-favorites-version-lastopened-2026-09';
+const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'category', 'iconType', 'imageUrl', 'iconName', 'isFavorite', 'createdAt', 'lastOpenedAt'];
+const CODE_VERSION = 'v5-platform-tag-2026-09';
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1522,14 +1530,19 @@ function doGet(e) {
             const [iconType, setIconType] = useState(editingApp?.iconType || 'gas');
             const [imageUrl, setImageUrl] = useState(editingApp?.imageUrl || '');
             const [materialIconName, setMaterialIconName] = useState(editingApp?.iconName || 'apps');
+            const [platform, setPlatform] = useState(
+                editingApp?.platform || (editingApp?.iconType === 'gas' ? 'gas' : editingApp?.iconType === 'github' ? 'github' : '')
+            );
             const [errors, setErrors] = useState({});
 
             const handleUrlChange = (val) => {
                 setUrl(val);
                 if (val.includes('script.google.com')) {
                     setIconType('gas');
+                    setPlatform('gas');
                 } else if (val.includes('github.com') || val.includes('github.io')) {
                     setIconType('github');
+                    setPlatform('github');
                 }
             };
 
@@ -1570,7 +1583,8 @@ function doGet(e) {
                     category: category.trim() || 'その他',
                     iconType,
                     imageUrl: iconType === 'image' ? imageUrl.trim() : '',
-                    iconName: iconType === 'material' ? materialIconName : ''
+                    iconName: iconType === 'material' ? materialIconName : '',
+                    platform
                 });
             };
 
@@ -1778,6 +1792,38 @@ function doGet(e) {
                                         {errors.imageUrl && <p className="text-xs text-red-500 mt-1">{errors.imageUrl}</p>}
                                     </div>
                                 )}
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2">
+                                    プラットフォームタグ（任意）
+                                </label>
+                                <div className="inline-flex rounded-m3-full bg-m3-surface p-1 shadow-sm">
+                                    <button
+                                        type="button"
+                                        onClick={() => setPlatform('')}
+                                        className={`px-3.5 py-2 rounded-m3-full text-xs font-medium transition-all ${platform === '' ? 'bg-m3-surfaceContainerHighest text-m3-onSurface font-bold shadow-sm' : 'text-m3-onSurfaceVariant'}`}
+                                    >
+                                        なし
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setPlatform('gas')}
+                                        className={`px-3 py-1.5 rounded-m3-full text-xs font-medium transition-all flex items-center gap-1.5 ${platform === 'gas' ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm font-bold' : 'text-m3-onSurfaceVariant'}`}
+                                    >
+                                        <GasIcon className="w-4 h-4" />
+                                        <span>GAS</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setPlatform('github')}
+                                        className={`px-3 py-1.5 rounded-m3-full text-xs font-medium transition-all flex items-center gap-1.5 ${platform === 'github' ? 'bg-[#24292F] text-white shadow-sm font-bold' : 'text-m3-onSurfaceVariant'}`}
+                                    >
+                                        <GithubIcon className="w-4 h-4" />
+                                        <span>GitHub</span>
+                                    </button>
+                                </div>
+                                <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1.5">※ カードのアイコンとは別に、タイトル横の小さいアイコンとタグとして表示されます（アイコンをGAS/GitHubにしていなくても選べます）。</p>
                             </div>
 
                             <div className="grid grid-cols-3 gap-3">
