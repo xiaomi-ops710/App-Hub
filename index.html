@@ -177,6 +177,8 @@
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
+        const PENDING_QUEUE_KEY = 'm3_app_hub_pending_queue';
+        const genOpId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         // --- GAS(Firebase連携)APIクライアント ---
         // GASのWebアプリURLをlocalStorageに保存し、設定されていればFirebase経由で同期する。
@@ -462,6 +464,53 @@
             const [showSplash, setShowSplash] = useState(true);
             const [splashFading, setSplashFading] = useState(false);
 
+            // --- 同期の信頼性を保証する送信キュー ---
+            // お気に入り・削除・追加/編集はすべて一度ここに積んでからサーバーへ送る。
+            // localStorageにも書き出すので、送信中にタブを閉じても次回起動時に必ず再送される。
+            const [pendingQueue, setPendingQueue] = useState(() => {
+                try {
+                    const saved = localStorage.getItem(PENDING_QUEUE_KEY);
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) { return []; }
+            });
+            const pendingQueueRef = useRef(pendingQueue);
+            const isFlushingRef = useRef(false);
+
+            useEffect(() => {
+                pendingQueueRef.current = pendingQueue;
+                try { localStorage.setItem(PENDING_QUEUE_KEY, JSON.stringify(pendingQueue)); } catch (e) {}
+            }, [pendingQueue]);
+
+            const enqueueSync = (op) => {
+                setPendingQueue(prev => {
+                    // 同じアプリへの保存は最新のものだけ残す。削除は保存より常に優先。
+                    const filtered = prev.filter(p => p.payload.id !== op.payload.id);
+                    return [...filtered, op];
+                });
+            };
+
+            const flushQueue = async () => {
+                if (!CloudApi.isEnabled()) return;
+                if (isFlushingRef.current) return;
+                isFlushingRef.current = true;
+                if (pendingQueueRef.current.length > 0) setSyncStatus('syncing');
+                const queue = [...pendingQueueRef.current];
+                let hadError = false;
+                for (const op of queue) {
+                    try {
+                        if (op.type === 'save') await CloudApi.save(op.payload);
+                        else if (op.type === 'delete') await CloudApi.remove(op.payload.id);
+                        setPendingQueue(prev => prev.filter(p => p.opId !== op.opId));
+                    } catch (err) {
+                        // 1件が失敗しても他の項目（お気に入りなど）の送信を止めない。
+                        // 失敗した項目だけキューに残し、次回まとめて再試行する。
+                        hadError = true;
+                    }
+                }
+                isFlushingRef.current = false;
+                setSyncStatus(hadError ? 'error' : 'idle');
+            };
+
             useEffect(() => {
                 const t1 = setTimeout(() => setSplashFading(true), 850);
                 const t2 = setTimeout(() => setShowSplash(false), 1250);
@@ -469,6 +518,17 @@
             }, []);
             const [undoToast, setUndoToast] = useState(null);
             const pendingDeleteRef = useRef(null);
+            const [selectMode, setSelectMode] = useState(false);
+            const [selectedIds, setSelectedIds] = useState([]);
+
+            const toggleSelectMode = () => {
+                setSelectMode(v => !v);
+                setSelectedIds([]);
+            };
+
+            const toggleSelectId = (id) => {
+                setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+            };
 
             useEffect(() => {
                 try { localStorage.setItem(STORAGE_KEY, JSON.stringify(apps)); } catch (e) {}
@@ -529,6 +589,15 @@
 
             const syncFromCloud = async (silent) => {
                 if (!CloudApi.isEnabled()) return;
+                // 未送信の変更が残っている場合は、それを送り切ってから取得する
+                // （先に取得してしまうと、未送信のお気に入り・追加などが上書きで消えてしまうため）
+                if (pendingQueueRef.current.length > 0) {
+                    await flushQueue();
+                    if (pendingQueueRef.current.length > 0) {
+                        if (!silent) showToast('未送信の変更があるため送信を再試行しています…（自動的に続行されます）', 4000);
+                        return;
+                    }
+                }
                 setSyncStatus('syncing');
                 try {
                     const cloudApps = await CloudApi.list();
@@ -542,9 +611,20 @@
                 }
             };
 
-            // 起動時: 同期先が設定されていれば読み込む
+            // 起動時: 未送信の変更を送信 → その後サーバーの最新を取得
             useEffect(() => {
                 if (CloudApi.isEnabled()) syncFromCloud(true);
+            }, []);
+
+            // 定期的に未送信キューの再送を試みる（通信が一時的に切れていた場合の自動リカバリ）
+            useEffect(() => {
+                if (!CloudApi.isEnabled()) return;
+                const interval = setInterval(() => {
+                    if (pendingQueueRef.current.length > 0) flushQueue();
+                }, 20000);
+                const handleOnline = () => flushQueue();
+                window.addEventListener('online', handleOnline);
+                return () => { clearInterval(interval); window.removeEventListener('online', handleOnline); };
             }, []);
 
             const handleSaveApiUrl = (url) => {
@@ -600,6 +680,9 @@
                     case 'recent':
                         list.sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
                         break;
+                    case 'mostUsed':
+                        list.sort((a, b) => (b.openCount || 0) - (a.openCount || 0));
+                        break;
                     default: // smart: favorites first, then newest
                         list.sort((a, b) => (b.isFavorite ? 1 : 0) - (a.isFavorite ? 1 : 0) || b.createdAt - a.createdAt);
                 }
@@ -614,28 +697,19 @@
                 setFavoritesOnly(false);
             };
 
-            const handleToggleFavorite = async (id, e) => {
+            const handleToggleFavorite = (id, e) => {
                 if (e) e.stopPropagation();
-                let updated, previous;
-                setApps(prev => {
-                    const next = prev.map(a => {
-                        if (a.id === id) {
-                            previous = a;
-                            updated = { ...a, isFavorite: !a.isFavorite };
-                            return updated;
-                        }
-                        return a;
-                    });
-                    return next;
-                });
-                if (CloudApi.isEnabled() && updated) {
-                    try {
-                        await CloudApi.save(updated);
-                    } catch (err) {
-                        // 同期に失敗した場合は表示上も元に戻し、状態の食い違いを防ぐ
-                        setApps(prev => prev.map(a => a.id === id ? previous : a));
-                        showToast(`お気に入りの同期に失敗: ${err.message}`, 5000);
+                let updated;
+                setApps(prev => prev.map(a => {
+                    if (a.id === id) {
+                        updated = { ...a, isFavorite: !a.isFavorite };
+                        return updated;
                     }
+                    return a;
+                }));
+                if (CloudApi.isEnabled() && updated) {
+                    enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
+                    flushQueue();
                 }
             };
 
@@ -643,9 +717,11 @@
                 window.open(app.url, '_blank', 'noopener,noreferrer');
                 const now = Date.now();
                 const openCount = (app.openCount || 0) + 1;
-                setApps(prev => prev.map(a => a.id === app.id ? { ...a, lastOpenedAt: now, openCount } : a));
+                const updated = { ...app, lastOpenedAt: now, openCount };
+                setApps(prev => prev.map(a => a.id === app.id ? updated : a));
                 if (CloudApi.isEnabled()) {
-                    CloudApi.save({ ...app, lastOpenedAt: now, openCount }).catch(() => {});
+                    enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
+                    flushQueue();
                 }
             };
 
@@ -657,22 +733,46 @@
                 setApps(prev => prev.filter(a => a.id !== id));
                 if (isModalOpen) setIsModalOpen(false);
 
-                // 誤削除防止: 5秒間は「元に戻す」で復元でき、それまでクラウド側の削除は実行しない
+                // 誤削除防止: 5秒間は「元に戻す」で復元できる。
+                // 5秒経過後はキューに積んで確実に送信する（送信中にタブを閉じても次回起動時に必ず再送される）。
                 const timeoutId = setTimeout(() => {
                     if (CloudApi.isEnabled()) {
-                        CloudApi.remove(id).catch((err) => showToast(`削除の同期に失敗: ${err.message}`, 5000));
+                        enqueueSync({ opId: genOpId(), type: 'delete', payload: { id } });
+                        flushQueue();
                     }
                     pendingDeleteRef.current = null;
                     setUndoToast(null);
                 }, 5000);
-                pendingDeleteRef.current = { app: appToDelete, timeoutId };
-                setUndoToast({ title });
+                pendingDeleteRef.current = { apps: [appToDelete], timeoutId };
+                setUndoToast({ title, count: 1 });
+            };
+
+            const handleBulkDelete = () => {
+                if (selectedIds.length === 0) return;
+                if (!window.confirm(`選択した${selectedIds.length}件を削除してもよろしいですか？`)) return;
+
+                const idsSnapshot = [...selectedIds];
+                const appsToDelete = apps.filter(a => idsSnapshot.includes(a.id));
+                setApps(prev => prev.filter(a => !idsSnapshot.includes(a.id)));
+                setSelectedIds([]);
+                setSelectMode(false);
+
+                const timeoutId = setTimeout(() => {
+                    if (CloudApi.isEnabled()) {
+                        idsSnapshot.forEach(id => enqueueSync({ opId: genOpId(), type: 'delete', payload: { id } }));
+                        flushQueue();
+                    }
+                    pendingDeleteRef.current = null;
+                    setUndoToast(null);
+                }, 5000);
+                pendingDeleteRef.current = { apps: appsToDelete, timeoutId };
+                setUndoToast({ title: `${idsSnapshot.length}件`, count: idsSnapshot.length });
             };
 
             const handleUndoDelete = () => {
                 if (!pendingDeleteRef.current) return;
                 clearTimeout(pendingDeleteRef.current.timeoutId);
-                setApps(prev => [pendingDeleteRef.current.app, ...prev]);
+                setApps(prev => [...pendingDeleteRef.current.apps, ...prev]);
                 pendingDeleteRef.current = null;
                 setUndoToast(null);
             };
@@ -681,46 +781,51 @@
                 let savedApp;
                 const isNew = !(editingApp && editingApp.id);
                 if (!isNew) {
-                    savedApp = { ...appData, id: editingApp.id, createdAt: editingApp.createdAt, isFavorite: editingApp.isFavorite };
+                    savedApp = { ...appData, id: editingApp.id, createdAt: editingApp.createdAt, isFavorite: editingApp.isFavorite, lastOpenedAt: editingApp.lastOpenedAt, openCount: editingApp.openCount };
                 } else {
                     savedApp = {
                         ...appData,
                         id: Date.now().toString(),
                         createdAt: Date.now(),
-                        isFavorite: false
+                        isFavorite: false,
+                        lastOpenedAt: 0,
+                        openCount: 0
                     };
                 }
 
-                if (CloudApi.isEnabled()) {
-                    setSavingOverlay(true);
-                    try {
-                        await CloudApi.save(savedApp);
-                        if (isNew) {
-                            setApps(prev => [savedApp, ...prev]);
-                            showToast('新しいアプリを追加し、スプレッドシートに保存しました');
-                        } else {
-                            setApps(prev => prev.map(a => a.id === editingApp.id ? savedApp : a));
-                            showToast('アプリ情報を更新し、スプレッドシートに保存しました');
-                        }
-                        setIsModalOpen(false);
-                        setEditingApp(null);
-                    } catch (err) {
-                        showToast(`スプレッドシートへの保存に失敗しました: ${err.message}（もう一度お試しください）`, 6000);
-                        // 保存に失敗した場合はモーダルを閉じず、入力内容を保持したまま再試行できるようにする
-                    } finally {
-                        setSavingOverlay(false);
-                    }
+                // 1. まずローカルへ確実に反映（この時点でlocalStorageにも保存されるため、これ以降は消えない）
+                if (isNew) {
+                    setApps(prev => [savedApp, ...prev]);
                 } else {
-                    // 同期未設定の場合は従来どおりローカル保存のみ
-                    if (isNew) {
-                        setApps(prev => [savedApp, ...prev]);
-                        showToast('新しいアプリを追加しました');
-                    } else {
-                        setApps(prev => prev.map(a => a.id === editingApp.id ? savedApp : a));
-                        showToast('アプリ情報を更新しました');
-                    }
+                    setApps(prev => prev.map(a => a.id === editingApp.id ? savedApp : a));
+                }
+
+                if (!CloudApi.isEnabled()) {
                     setIsModalOpen(false);
                     setEditingApp(null);
+                    showToast(isNew ? '新しいアプリを追加しました' : 'アプリ情報を更新しました');
+                    return;
+                }
+
+                // 2. 送信キューに積む（これでタブを閉じても次回起動時に必ず再送される）
+                enqueueSync({ opId: genOpId(), type: 'save', payload: savedApp });
+
+                // 3. 体感のため、最大8秒だけ画面をブロックして即時送信を試みる。
+                //    それ以上かかる/失敗しても、データはキューに残っているため失われない。
+                setSavingOverlay(true);
+                await Promise.race([
+                    flushQueue(),
+                    new Promise((resolve) => setTimeout(resolve, 8000))
+                ]);
+                setSavingOverlay(false);
+                setIsModalOpen(false);
+                setEditingApp(null);
+
+                const stillPending = pendingQueueRef.current.some(p => p.payload.id === savedApp.id);
+                if (stillPending) {
+                    showToast('保存しました（通信状況により同期待ちです。自動的に再送されます）', 5000);
+                } else {
+                    showToast(isNew ? '新しいアプリを追加し、スプレッドシートに保存しました' : 'アプリ情報を更新し、スプレッドシートに保存しました');
                 }
             };
 
@@ -756,6 +861,19 @@
                     document.body.removeChild(textArea);
                 }
                 showToast(`「${title}」のURLをコピーしました`);
+            };
+
+            const handleShareApp = async (app, e) => {
+                if (e) e.stopPropagation();
+                if (navigator.share) {
+                    try {
+                        await navigator.share({ title: app.title, text: app.description || app.title, url: app.url });
+                    } catch (err) {
+                        // ユーザーが共有をキャンセルした場合などは何もしない
+                    }
+                } else {
+                    copyToClipboard(app.url, app.title, null);
+                }
             };
 
             const handleExport = () => {
@@ -796,6 +914,7 @@
                                 iconType: ['gas', 'github', 'image', 'default', 'material'].includes(d.iconType) ? d.iconType : 'default',
                                 imageUrl: d.imageUrl || '',
                                 iconName: d.iconName || '',
+                                cardColor: d.cardColor || '',
                                 category: d.category || 'その他',
                                 isFavorite: !!d.isFavorite,
                                 createdAt: d.createdAt || Date.now(),
@@ -846,16 +965,25 @@
                                 <input type="file" accept="application/json" ref={importInputRef} onChange={handleImportFile} className="hidden" />
                                 <button
                                     onClick={() => CloudApi.isEnabled() ? syncFromCloud(false) : setSyncModalOpen(true)}
-                                    className={`p-3 rounded-m3-full transition-colors flex items-center justify-center ${
+                                    className={`relative p-3 rounded-m3-full transition-colors flex items-center justify-center ${
                                         !CloudApi.isEnabled() ? 'text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHighest' :
                                         syncStatus === 'error' ? 'text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30' :
                                         'text-m3-primary hover:bg-m3-surfaceContainerHighest'
                                     }`}
-                                    title={!CloudApi.isEnabled() ? 'スプレッドシート同期を設定' : syncStatus === 'error' ? '同期エラー（クリックで再試行）' : 'スプレッドシートと今すぐ同期'}
+                                    title={
+                                        !CloudApi.isEnabled() ? 'スプレッドシート同期を設定' :
+                                        pendingQueue.length > 0 ? `${pendingQueue.length}件が同期待ちです（クリックで再試行）` :
+                                        syncStatus === 'error' ? '同期エラー（クリックで再試行）' : 'スプレッドシートと今すぐ同期'
+                                    }
                                 >
                                     <span className={`material-symbols-rounded ${syncStatus === 'syncing' ? 'animate-spin' : ''}`}>
                                         {!CloudApi.isEnabled() ? 'cloud_off' : syncStatus === 'error' ? 'cloud_off' : syncStatus === 'syncing' ? 'sync' : 'cloud_done'}
                                     </span>
+                                    {pendingQueue.length > 0 && (
+                                        <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
+                                            {pendingQueue.length}
+                                        </span>
+                                    )}
                                 </button>
                                 <button
                                     onClick={() => setSyncModalOpen(true)}
@@ -934,6 +1062,7 @@
                                         <option value="oldest">古い順</option>
                                         <option value="az">名前順 (A-Z/あ-ん)</option>
                                         <option value="recent">最近使った順</option>
+                                        <option value="mostUsed">よく使う順</option>
                                     </select>
                                     <span className="material-symbols-rounded absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-m3-onSurfaceVariant text-lg">unfold_more</span>
                                 </div>
@@ -944,6 +1073,14 @@
                                     title="お気に入りのみ表示"
                                 >
                                     <span className={`material-symbols-rounded ${favoritesOnly ? 'fill' : ''}`}>star</span>
+                                </button>
+
+                                <button
+                                    onClick={toggleSelectMode}
+                                    className={`p-3 rounded-m3-full transition-colors shadow-sm flex items-center justify-center ${selectMode ? 'bg-m3-primary text-m3-onPrimary' : 'bg-m3-surfaceContainerHigh text-m3-onSurfaceVariant'}`}
+                                    title={selectMode ? '選択モードを終了' : '複数選択して一括削除'}
+                                >
+                                    <span className="material-symbols-rounded">checklist</span>
                                 </button>
 
                                 <button
@@ -1085,10 +1222,18 @@
                                 {filteredApps.map((app, index) => (
                                     <div
                                         key={app.id}
-                                        onClick={() => handleOpenApp(app)}
-                                        className={`m3-card animate-card-in group relative flex flex-col justify-between bg-m3-surfaceContainer rounded-m3-3xl ${CARD_SIZE_CONFIG[cardSize].padding} cursor-pointer hover:bg-m3-surfaceContainerHigh hover:shadow-lg transition-all`}
-                                        style={{ animationDelay: `${Math.min(index * 40, 400)}ms` }}
+                                        onClick={() => selectMode ? toggleSelectId(app.id) : handleOpenApp(app)}
+                                        className={`m3-card animate-card-in group relative flex flex-col justify-between bg-m3-surfaceContainer rounded-m3-3xl ${CARD_SIZE_CONFIG[cardSize].padding} cursor-pointer hover:bg-m3-surfaceContainerHigh hover:shadow-lg transition-all ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
+                                        style={{
+                                            animationDelay: `${Math.min(index * 40, 400)}ms`,
+                                            borderLeft: cardColorHex(app.cardColor) ? `5px solid ${cardColorHex(app.cardColor)}` : undefined
+                                        }}
                                     >
+                                        {selectMode && (
+                                            <div className={`absolute top-2.5 left-2.5 z-10 w-6 h-6 rounded-full flex items-center justify-center border-2 ${selectedIds.includes(app.id) ? 'bg-m3-primary border-m3-primary text-m3-onPrimary' : 'bg-m3-surface/80 border-m3-onSurfaceVariant/50'}`}>
+                                                {selectedIds.includes(app.id) && <span className="material-symbols-rounded text-sm">check</span>}
+                                            </div>
+                                        )}
                                         <div>
                                             <div className="flex items-start justify-between gap-3 mb-3">
                                                 <AppIconDisplay type={app.iconType} imageUrl={app.imageUrl} iconName={app.iconName} size={CARD_SIZE_CONFIG[cardSize].iconSize} />
@@ -1171,6 +1316,13 @@
                                                 >
                                                     <span className="material-symbols-rounded text-sm">qr_code_2</span>
                                                 </button>
+                                                <button
+                                                    onClick={(e) => handleShareApp(app, e)}
+                                                    className="inline-flex items-center gap-1 hover:text-m3-primary py-1 px-2 rounded-m3-s hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    title="共有"
+                                                >
+                                                    <span className="material-symbols-rounded text-sm">share</span>
+                                                </button>
                                             </div>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); handleOpenApp(app); }}
@@ -1188,10 +1340,18 @@
                                 {filteredApps.map((app, index) => (
                                     <div
                                         key={app.id}
-                                        onClick={() => handleOpenApp(app)}
-                                        className="m3-card animate-card-in group flex items-center justify-between bg-m3-surfaceContainer rounded-m3-xl p-4 cursor-pointer hover:bg-m3-surfaceContainerHigh hover:shadow-md transition-all gap-4"
-                                        style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
+                                        onClick={() => selectMode ? toggleSelectId(app.id) : handleOpenApp(app)}
+                                        className={`m3-card animate-card-in group flex items-center justify-between bg-m3-surfaceContainer rounded-m3-xl p-4 cursor-pointer hover:bg-m3-surfaceContainerHigh hover:shadow-md transition-all gap-4 ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
+                                        style={{
+                                            animationDelay: `${Math.min(index * 30, 300)}ms`,
+                                            borderLeft: cardColorHex(app.cardColor) ? `5px solid ${cardColorHex(app.cardColor)}` : undefined
+                                        }}
                                     >
+                                        {selectMode && (
+                                            <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center border-2 ${selectedIds.includes(app.id) ? 'bg-m3-primary border-m3-primary text-m3-onPrimary' : 'bg-m3-surface border-m3-onSurfaceVariant/50'}`}>
+                                                {selectedIds.includes(app.id) && <span className="material-symbols-rounded text-sm">check</span>}
+                                            </div>
+                                        )}
                                         <div className="flex items-center gap-3.5 min-w-0 flex-1">
                                             <AppIconDisplay type={app.iconType} imageUrl={app.imageUrl} iconName={app.iconName} size="sm" />
                                             <div className="min-w-0 flex-1">
@@ -1268,13 +1428,34 @@
                         )}
                     </main>
 
-                    <button
-                        onClick={openAddModal}
-                        className="fixed bottom-6 right-6 z-30 w-16 h-16 bg-m3-primaryContainer text-m3-onPrimaryContainer rounded-m3-3xl shadow-xl flex items-center justify-center hover:shadow-2xl hover:-translate-y-0.5 m3-bounce"
-                        aria-label="アプリを追加"
-                    >
-                        <span className="material-symbols-rounded text-3xl">add</span>
-                    </button>
+                    {!selectMode && (
+                        <button
+                            onClick={openAddModal}
+                            className="fixed bottom-6 right-6 z-30 w-16 h-16 bg-m3-primaryContainer text-m3-onPrimaryContainer rounded-m3-3xl shadow-xl flex items-center justify-center hover:shadow-2xl hover:-translate-y-0.5 m3-bounce"
+                            aria-label="アプリを追加"
+                        >
+                            <span className="material-symbols-rounded text-3xl">add</span>
+                        </button>
+                    )}
+
+                    {selectMode && (
+                        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 bg-m3-onSurface text-m3-surface pl-5 pr-2 py-2 rounded-m3-full shadow-2xl text-sm font-medium flex items-center gap-3 animate-toast">
+                            <span>{selectedIds.length}件選択中</span>
+                            <button
+                                onClick={handleBulkDelete}
+                                disabled={selectedIds.length === 0}
+                                className="px-4 py-1.5 bg-red-500/90 hover:bg-red-500 rounded-m3-full font-bold text-xs text-white m3-bounce disabled:opacity-40"
+                            >
+                                削除
+                            </button>
+                            <button
+                                onClick={toggleSelectMode}
+                                className="px-4 py-1.5 bg-white/15 hover:bg-white/25 rounded-m3-full font-bold text-xs m3-bounce"
+                            >
+                                キャンセル
+                            </button>
+                        </div>
+                    )}
 
                     {qrApp && (
                         <QrModal app={qrApp} onClose={() => setQrApp(null)} />
@@ -1346,8 +1527,8 @@
 //    リダイレクト時にCORSでブロックされ書き込みが失敗することがあるための回避策です）。
 
 const SHEET_NAME = 'Apps';
-const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'category', 'iconType', 'imageUrl', 'iconName', 'isFavorite', 'createdAt', 'lastOpenedAt', 'openCount'];
-const CODE_VERSION = 'v6-undo-opencount-theme-2026-09';
+const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'category', 'iconType', 'imageUrl', 'iconName', 'cardColor', 'isFavorite', 'createdAt', 'lastOpenedAt', 'openCount'];
+const CODE_VERSION = 'v7-cardcolor-queuefix-2026-09';
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1622,6 +1803,20 @@ function doGet(e) {
             );
         }
 
+        // カードのアクセントカラー（左端のバーとして表示）
+        const CARD_COLORS = [
+            { key: '', hex: null, label: 'なし' },
+            { key: 'red', hex: '#ef4444', label: 'レッド' },
+            { key: 'orange', hex: '#f97316', label: 'オレンジ' },
+            { key: 'amber', hex: '#f59e0b', label: 'アンバー' },
+            { key: 'green', hex: '#22c55e', label: 'グリーン' },
+            { key: 'teal', hex: '#14b8a6', label: 'ティール' },
+            { key: 'blue', hex: '#3b82f6', label: 'ブルー' },
+            { key: 'purple', hex: '#a855f7', label: 'パープル' },
+            { key: 'pink', hex: '#ec4899', label: 'ピンク' },
+        ];
+        const cardColorHex = (key) => (CARD_COLORS.find(c => c.key === key) || {}).hex || null;
+
         const MATERIAL_ICON_CHOICES = [
             'apps', 'code', 'terminal', 'cloud', 'cloud_sync', 'storage', 'dashboard', 'bolt',
             'build', 'extension', 'widgets', 'smart_toy', 'science', 'rocket_launch', 'insights',
@@ -1646,6 +1841,7 @@ function doGet(e) {
             const [platform, setPlatform] = useState(
                 editingApp?.platform || (editingApp?.iconType === 'gas' ? 'gas' : editingApp?.iconType === 'github' ? 'github' : '')
             );
+            const [cardColor, setCardColor] = useState(editingApp?.cardColor || '');
             const [errors, setErrors] = useState({});
 
             const handleUrlChange = (val) => {
@@ -1697,7 +1893,8 @@ function doGet(e) {
                     iconType,
                     imageUrl: iconType === 'image' ? imageUrl.trim() : '',
                     iconName: iconType === 'material' ? materialIconName : '',
-                    platform
+                    platform,
+                    cardColor
                 });
             };
 
@@ -1937,6 +2134,26 @@ function doGet(e) {
                                     </button>
                                 </div>
                                 <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1.5">※ カードのアイコンとは別に、タイトル横の小さいアイコンとタグとして表示されます（アイコンをGAS/GitHubにしていなくても選べます）。</p>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2">
+                                    カードの色（任意）
+                                </label>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    {CARD_COLORS.map((c) => (
+                                        <button
+                                            key={c.key || 'none'}
+                                            type="button"
+                                            onClick={() => setCardColor(c.key)}
+                                            title={c.label}
+                                            className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${cardColor === c.key ? 'ring-2 ring-offset-2 ring-m3-primary ring-offset-m3-surfaceContainerHigh scale-110' : ''}`}
+                                            style={{ backgroundColor: c.hex || 'transparent', border: c.hex ? 'none' : '2px dashed var(--m3-on-surface-variant)' }}
+                                        >
+                                            {!c.hex && <span className="material-symbols-rounded text-sm text-m3-onSurfaceVariant">block</span>}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
 
                             <div className="grid grid-cols-3 gap-3">
