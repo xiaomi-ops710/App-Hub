@@ -4,6 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>アプリハブ - 自作WEBアプリリンク集</title>
+    <script>
+        // 起動時の白画面フラッシュ防止: CSSやReactの読み込みを待たず、
+        // 一番最初にこの同期スクリプトでダーク/ライトを確定させる。
+        (function () {
+            try {
+                var stored = localStorage.getItem('m3_app_hub_theme');
+                var isDark = stored === 'dark' || (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                if (isDark) document.documentElement.classList.add('dark');
+            } catch (e) {}
+        })();
+    </script>
+    <!-- 白画面フラッシュ防止用の最小限のクリティカルCSS。
+         Tailwindのスクリプト読み込みを待たず、最初のペイントから背景色を確定させる。 -->
+    <style>
+        :root { --bg-page: #F5F7FC; }
+        html.dark { --bg-page: #0D0F13; }
+        html, body { background-color: var(--bg-page); margin: 0; }
+    </style>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -174,6 +192,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
+        const APP_VERSION = '2.1.0'; // アプリ自体のバージョン（起動画面に表示）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
@@ -206,8 +225,14 @@
             },
             async save(app) {
                 const base = this.getUrl();
-                const url = `${base}?action=save&data=${encodeURIComponent(JSON.stringify(app))}`;
-                const res = await fetch(url);
+                // GETだとURLの長さ制限に引っかかり、説明文などが長いアプリで
+                // 「保存したはずなのに反映されない」という不具合が起きるため、POSTに変更。
+                // Content-Typeをtext/plainにすることでブラウザのpreflightを避け、GAS側でも確実に届く。
+                const res = await fetch(base, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify({ action: 'save', app })
+                });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
@@ -482,11 +507,13 @@
             }, [pendingQueue]);
 
             const enqueueSync = (op) => {
-                setPendingQueue(prev => {
-                    // 同じアプリへの保存は最新のものだけ残す。削除は保存より常に優先。
-                    const filtered = prev.filter(p => p.payload.id !== op.payload.id);
-                    return [...filtered, op];
-                });
+                // 同じアプリへの保存は最新のものだけ残す。
+                // refを同期的に更新することで、直後にflushQueue()を呼んでも
+                // 「Reactの再描画待ちで古いキューを見てしまい、今追加した分が送信されない」事態を防ぐ。
+                const filtered = pendingQueueRef.current.filter(p => p.payload.id !== op.payload.id);
+                const next = [...filtered, op];
+                pendingQueueRef.current = next;
+                setPendingQueue(next);
             };
 
             const flushQueue = async () => {
@@ -769,6 +796,23 @@
                 setUndoToast({ title: `${idsSnapshot.length}件`, count: idsSnapshot.length });
             };
 
+            const handleBulkSetCategory = () => {
+                if (selectedIds.length === 0) return;
+                const input = window.prompt(`選択した${selectedIds.length}件に設定するカテゴリを入力してください（カンマ区切りで複数可）`, '');
+                if (input === null) return;
+                const idsSnapshot = [...selectedIds];
+                const trimmed = input.trim() || 'その他';
+                const updatedApps = apps.filter(a => idsSnapshot.includes(a.id)).map(a => ({ ...a, category: trimmed }));
+                setApps(prev => prev.map(a => idsSnapshot.includes(a.id) ? { ...a, category: trimmed } : a));
+                if (CloudApi.isEnabled()) {
+                    updatedApps.forEach(a => enqueueSync({ opId: genOpId(), type: 'save', payload: a }));
+                    flushQueue();
+                }
+                setSelectMode(false);
+                setSelectedIds([]);
+                showToast(`${idsSnapshot.length}件のカテゴリを変更しました`);
+            };
+
             const handleUndoDelete = () => {
                 if (!pendingDeleteRef.current) return;
                 clearTimeout(pendingDeleteRef.current.timeoutId);
@@ -947,6 +991,7 @@
                                 <span className="material-symbols-rounded text-4xl">grid_view</span>
                             </div>
                             <h1 className="mt-5 text-2xl font-extrabold text-m3-onPrimaryContainer tracking-tight animate-splash-text">アプリハブ</h1>
+                            <p className="mt-1 text-xs font-medium text-m3-onPrimaryContainer/70 animate-splash-text">v{APP_VERSION}</p>
                         </div>
                     )}
                     <header className="sticky top-0 z-20 bg-m3-surfaceContainer/95 backdrop-blur-md px-4 lg:px-8 py-3.5 transition-colors shadow-sm">
@@ -1442,6 +1487,13 @@
                         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 bg-m3-onSurface text-m3-surface pl-5 pr-2 py-2 rounded-m3-full shadow-2xl text-sm font-medium flex items-center gap-3 animate-toast">
                             <span>{selectedIds.length}件選択中</span>
                             <button
+                                onClick={handleBulkSetCategory}
+                                disabled={selectedIds.length === 0}
+                                className="px-4 py-1.5 bg-white/15 hover:bg-white/25 rounded-m3-full font-bold text-xs m3-bounce disabled:opacity-40"
+                            >
+                                カテゴリ変更
+                            </button>
+                            <button
                                 onClick={handleBulkDelete}
                                 disabled={selectedIds.length === 0}
                                 className="px-4 py-1.5 bg-red-500/90 hover:bg-red-500 rounded-m3-full font-bold text-xs text-white m3-bounce disabled:opacity-40"
@@ -1523,12 +1575,13 @@
 // ※ コードを直した後は、必ず「デプロイ」>「デプロイを管理」>編集(鉛筆)>
 //    「バージョン」を「新バージョン」にして「デプロイ」を押し直してください。
 //    保存しただけでは、既存の公開URLには反映されません（これが一番の詰まりどころです）。
-// ※ すべてGET通信のみで実装しています（ブラウザからGASへPOSTすると
-//    リダイレクト時にCORSでブロックされ書き込みが失敗することがあるための回避策です）。
+// ※ 一覧取得(list)・削除(delete)はGET、保存(save)はPOSTで実装しています。
+//    保存はアプリの情報量が多いとURLの長さ制限に引っかかりGETでは失敗することがあるため、
+//    データ量に上限のないPOSTに変更しています。
 
 const SHEET_NAME = 'Apps';
 const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'category', 'iconType', 'imageUrl', 'iconName', 'cardColor', 'isFavorite', 'createdAt', 'lastOpenedAt', 'openCount'];
-const CODE_VERSION = 'v7-cardcolor-queuefix-2026-09';
+const CODE_VERSION = 'v8-post-save-fix-2026-09';
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1562,6 +1615,24 @@ function findRow_(sheet, id) {
   return -1;
 }
 
+function saveAppRow_(sheet, app) {
+  const id = app.id || Utilities.getUuid();
+  const createdAt = app.createdAt || Date.now();
+  const row = HEADERS.map(h => {
+    if (h === 'id') return id;
+    if (h === 'createdAt') return createdAt;
+    if (h === 'isFavorite') return !!app.isFavorite;
+    return app[h] !== undefined ? app[h] : '';
+  });
+  const rowIndex = findRow_(sheet, id);
+  if (rowIndex === -1) {
+    sheet.appendRow(row);
+  } else {
+    sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
+  }
+  return id;
+}
+
 function doGet(e) {
   e = e || {}; // エディタで直接「実行」した場合はeが渡らないため、その場合でもエラーにならないようにする
   const action = (e.parameter && e.parameter.action) || 'list';
@@ -1584,23 +1655,11 @@ function doGet(e) {
     return jsonOut_({ apps: apps, version: CODE_VERSION });
   }
 
+  // 互換用: 万一古いフロントエンドからGETでsaveが来た場合も一応処理する
   if (action === 'save') {
     try {
       const app = JSON.parse(e.parameter.data || '{}');
-      const id = app.id || Utilities.getUuid();
-      const createdAt = app.createdAt || Date.now();
-      const row = HEADERS.map(h => {
-        if (h === 'id') return id;
-        if (h === 'createdAt') return createdAt;
-        if (h === 'isFavorite') return !!app.isFavorite;
-        return app[h] !== undefined ? app[h] : '';
-      });
-      const rowIndex = findRow_(sheet, id);
-      if (rowIndex === -1) {
-        sheet.appendRow(row);
-      } else {
-        sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
-      }
+      const id = saveAppRow_(sheet, app);
       return jsonOut_({ success: true, id: id });
     } catch (err) {
       return jsonOut_({ error: String(err) });
@@ -1618,6 +1677,21 @@ function doGet(e) {
   }
 
   return jsonOut_({ error: 'unknown action: ' + JSON.stringify(action) + ' (受け取ったパラメータ: ' + JSON.stringify(e.parameter) + ')' });
+}
+
+function doPost(e) {
+  e = e || {};
+  try {
+    const body = JSON.parse((e.postData && e.postData.contents) || '{}');
+    const sheet = getSheet_();
+    if (body.action === 'save') {
+      const id = saveAppRow_(sheet, body.app || {});
+      return jsonOut_({ success: true, id: id });
+    }
+    return jsonOut_({ error: 'unknown POST action: ' + JSON.stringify(body.action) });
+  } catch (err) {
+    return jsonOut_({ error: String(err) });
+  }
 }`;
 
         function QrModal({ app, onClose }) {
@@ -1829,20 +1903,58 @@ function doGet(e) {
         ];
 
         function ModalForm({ editingApp, existingApps, onClose, onSave, onDelete, onDuplicate }) {
-            const [title, setTitle] = useState(editingApp?.title || '');
-            const [url, setUrl] = useState(editingApp?.url || '');
-            const [editUrl, setEditUrl] = useState(editingApp?.editUrl || '');
-            const [version, setVersion] = useState(editingApp?.version || '');
-            const [description, setDescription] = useState(editingApp?.description || '');
-            const [category, setCategory] = useState(editingApp?.category || '');
-            const [iconType, setIconType] = useState(editingApp?.iconType || 'gas');
-            const [imageUrl, setImageUrl] = useState(editingApp?.imageUrl || '');
-            const [materialIconName, setMaterialIconName] = useState(editingApp?.iconName || 'apps');
-            const [platform, setPlatform] = useState(
-                editingApp?.platform || (editingApp?.iconType === 'gas' ? 'gas' : editingApp?.iconType === 'github' ? 'github' : '')
+            const draftKey = `m3_app_hub_draft_${editingApp?.id || 'new'}`;
+            const initialDraft = (() => {
+                try {
+                    const raw = localStorage.getItem(draftKey);
+                    return raw ? JSON.parse(raw) : null;
+                } catch (e) { return null; }
+            })();
+
+            const [title, setTitle] = useState(() => initialDraft?.title ?? (editingApp?.title || ''));
+            const [url, setUrl] = useState(() => initialDraft?.url ?? (editingApp?.url || ''));
+            const [editUrl, setEditUrl] = useState(() => initialDraft?.editUrl ?? (editingApp?.editUrl || ''));
+            const [version, setVersion] = useState(() => initialDraft?.version ?? (editingApp?.version || ''));
+            const [description, setDescription] = useState(() => initialDraft?.description ?? (editingApp?.description || ''));
+            const [category, setCategory] = useState(() => initialDraft?.category ?? (editingApp?.category || ''));
+            const [iconType, setIconType] = useState(() => initialDraft?.iconType ?? (editingApp?.iconType || 'gas'));
+            const [imageUrl, setImageUrl] = useState(() => initialDraft?.imageUrl ?? (editingApp?.imageUrl || ''));
+            const [materialIconName, setMaterialIconName] = useState(() => initialDraft?.iconName ?? (editingApp?.iconName || 'apps'));
+            const [platform, setPlatform] = useState(() =>
+                initialDraft?.platform ?? (editingApp?.platform || (editingApp?.iconType === 'gas' ? 'gas' : editingApp?.iconType === 'github' ? 'github' : ''))
             );
-            const [cardColor, setCardColor] = useState(editingApp?.cardColor || '');
+            const [cardColor, setCardColor] = useState(() => initialDraft?.cardColor ?? (editingApp?.cardColor || ''));
             const [errors, setErrors] = useState({});
+            const [draftRestored, setDraftRestored] = useState(!!initialDraft);
+
+            // 入力内容を自動的に下書き保存する（誤ってモーダルを閉じても内容が消えないように）
+            useEffect(() => {
+                const draft = { title, url, editUrl, version, description, category, iconType, imageUrl, iconName: materialIconName, platform, cardColor };
+                const t = setTimeout(() => {
+                    try { localStorage.setItem(draftKey, JSON.stringify(draft)); } catch (e) {}
+                }, 300);
+                return () => clearTimeout(t);
+            }, [title, url, editUrl, version, description, category, iconType, imageUrl, materialIconName, platform, cardColor]);
+
+            const clearDraft = () => {
+                try { localStorage.removeItem(draftKey); } catch (e) {}
+            };
+
+            const discardDraft = () => {
+                clearDraft();
+                setTitle(editingApp?.title || '');
+                setUrl(editingApp?.url || '');
+                setEditUrl(editingApp?.editUrl || '');
+                setVersion(editingApp?.version || '');
+                setDescription(editingApp?.description || '');
+                setCategory(editingApp?.category || '');
+                setIconType(editingApp?.iconType || 'gas');
+                setImageUrl(editingApp?.imageUrl || '');
+                setMaterialIconName(editingApp?.iconName || 'apps');
+                setPlatform(editingApp?.platform || (editingApp?.iconType === 'gas' ? 'gas' : editingApp?.iconType === 'github' ? 'github' : ''));
+                setCardColor(editingApp?.cardColor || '');
+                setDraftRestored(false);
+            };
 
             const handleUrlChange = (val) => {
                 setUrl(val);
@@ -1883,6 +1995,7 @@ function doGet(e) {
             const handleSubmit = (e) => {
                 e.preventDefault();
                 if (!validate()) return;
+                clearDraft();
                 onSave({
                     title: title.trim(),
                     url: url.trim(),
@@ -1945,6 +2058,15 @@ function doGet(e) {
                         </div>
 
                         <form onSubmit={handleSubmit} className="p-6 overflow-y-auto flex-1 space-y-5">
+                            {draftRestored && (
+                                <div className="flex items-center justify-between gap-2 bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-xs font-medium px-3.5 py-2.5 rounded-m3-l">
+                                    <span className="flex items-center gap-1.5">
+                                        <span className="material-symbols-rounded text-base">restore</span>
+                                        保存されていなかった入力内容を復元しました
+                                    </span>
+                                    <button type="button" onClick={discardDraft} className="underline hover:no-underline flex-shrink-0">破棄</button>
+                                </div>
+                            )}
                             <div>
                                 <div className="flex items-center justify-between mb-1.5">
                                     <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider">
