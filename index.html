@@ -392,8 +392,8 @@
             if (type === 'material' && iconName) {
                 const iconTextSize = { sm: 'text-lg', md: 'text-2xl', lg: 'text-3xl' }[size];
                 return (
-                    <div className={`${sizeClasses} flex items-center justify-center rounded-m3-l bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm flex-shrink-0`}>
-                        <span className={`material-symbols-rounded ${iconTextSize}`}>{iconName}</span>
+                    <div className={`${sizeClasses} flex items-center justify-center rounded-m3-l bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm flex-shrink-0 overflow-hidden`}>
+                        <span className={`material-symbols-rounded ${iconTextSize} leading-none`}>{iconName}</span>
                     </div>
                 );
             }
@@ -699,6 +699,18 @@
                             setEditingApp(null);
                             setIsModalOpen(true);
                         }
+                    } else if ((e.key === 'f' || e.key === 'F') && !isModalOpen) {
+                        const tag = document.activeElement?.tagName;
+                        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+                            e.preventDefault();
+                            setFavoritesOnly(v => !v);
+                        }
+                    } else if ((e.key === 'v' || e.key === 'V') && !isModalOpen) {
+                        const tag = document.activeElement?.tagName;
+                        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+                            e.preventDefault();
+                            setViewMode(v => v === 'grid' ? 'list' : 'grid');
+                        }
                     }
                 };
                 window.addEventListener('keydown', handleKeyDown);
@@ -782,9 +794,8 @@
                         splitCategories(app.category).some(c => selectedCategories.includes(c));
 
                     const matchesIcon = selectedIconFilter === 'ALL' ||
-                        (selectedIconFilter === 'gas' && app.iconType === 'gas') ||
-                        (selectedIconFilter === 'github' && app.iconType === 'github') ||
-                        (selectedIconFilter === 'other' && app.iconType !== 'gas' && app.iconType !== 'github');
+                        (selectedIconFilter === 'gas' && getPlatform(app) === 'gas') ||
+                        (selectedIconFilter === 'github' && getPlatform(app) === 'github');
 
                     const matchesFavorite = !favoritesOnly || app.isFavorite;
 
@@ -831,6 +842,19 @@
                 if (!target) return;
                 const updated = { ...target, isFavorite: !target.isFavorite };
                 setApps(prev => prev.map(a => a.id === id ? updated : a));
+                if (CloudApi.isEnabled()) {
+                    enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
+                    flushQueue();
+                }
+            };
+
+            const handleRemoveTagFromApp = (appId, tag, e) => {
+                if (e) e.stopPropagation();
+                const target = apps.find(a => a.id === appId);
+                if (!target) return;
+                const remaining = splitCategories(target.category).filter(t => t !== tag);
+                const updated = { ...target, category: remaining.length > 0 ? remaining.join(', ') : 'その他', updatedAt: Date.now() };
+                setApps(prev => prev.map(a => a.id === appId ? updated : a));
                 if (CloudApi.isEnabled()) {
                     enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
                     flushQueue();
@@ -899,8 +923,8 @@
                 if (input === null) return;
                 const idsSnapshot = [...selectedIds];
                 const trimmed = input.trim() || 'その他';
-                const updatedApps = apps.filter(a => idsSnapshot.includes(a.id)).map(a => ({ ...a, category: trimmed }));
-                setApps(prev => prev.map(a => idsSnapshot.includes(a.id) ? { ...a, category: trimmed } : a));
+                const updatedApps = apps.filter(a => idsSnapshot.includes(a.id)).map(a => ({ ...a, category: trimmed, updatedAt: Date.now() }));
+                setApps(prev => prev.map(a => idsSnapshot.includes(a.id) ? { ...a, category: trimmed, updatedAt: Date.now() } : a));
                 if (CloudApi.isEnabled()) {
                     updatedApps.forEach(a => enqueueSync({ opId: genOpId(), type: 'save', payload: a }));
                     flushQueue();
@@ -920,7 +944,7 @@
                     const tags = splitCategories(categoryStr).map(t => t === oldName ? newName : t);
                     return [...new Set(tags)].join(', ');
                 };
-                const updatedApps = affected.map(a => ({ ...a, category: rebuild(a.category) }));
+                const updatedApps = affected.map(a => ({ ...a, category: rebuild(a.category), updatedAt: Date.now() }));
                 setApps(prev => prev.map(a => {
                     const updated = updatedApps.find(u => u.id === a.id);
                     return updated || a;
@@ -941,7 +965,7 @@
                     const tags = splitCategories(categoryStr).filter(t => t !== name);
                     return tags.length > 0 ? tags.join(', ') : 'その他';
                 };
-                const updatedApps = affected.map(a => ({ ...a, category: rebuild(a.category) }));
+                const updatedApps = affected.map(a => ({ ...a, category: rebuild(a.category), updatedAt: Date.now() }));
                 setApps(prev => prev.map(a => {
                     const updated = updatedApps.find(u => u.id === a.id);
                     return updated || a;
@@ -966,12 +990,13 @@
                 let savedApp;
                 const isNew = !(editingApp && editingApp.id);
                 if (!isNew) {
-                    savedApp = { ...appData, id: editingApp.id, createdAt: editingApp.createdAt, isFavorite: editingApp.isFavorite, lastOpenedAt: editingApp.lastOpenedAt, openCount: editingApp.openCount };
+                    savedApp = { ...appData, id: editingApp.id, createdAt: editingApp.createdAt, isFavorite: editingApp.isFavorite, lastOpenedAt: editingApp.lastOpenedAt, openCount: editingApp.openCount, updatedAt: Date.now() };
                 } else {
                     savedApp = {
                         ...appData,
                         id: Date.now().toString(),
                         createdAt: Date.now(),
+                        updatedAt: Date.now(),
                         isFavorite: false,
                         lastOpenedAt: 0,
                         openCount: 0
@@ -1104,6 +1129,7 @@
                                 category: d.category || 'その他',
                                 isFavorite: !!d.isFavorite,
                                 createdAt: d.createdAt || Date.now(),
+                                updatedAt: d.updatedAt || d.createdAt || Date.now(),
                                 lastOpenedAt: d.lastOpenedAt || 0,
                                 openCount: d.openCount || 0
                             }));
@@ -1319,13 +1345,31 @@
                                     <span className="material-symbols-rounded absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-m3-onSurfaceVariant text-lg">unfold_more</span>
                                 </div>
 
-                                <button
-                                    onClick={() => setFavoritesOnly(v => !v)}
-                                    className={`p-3 rounded-m3-full transition-colors shadow-sm flex items-center justify-center ${favoritesOnly ? 'bg-amber-400 text-white' : 'bg-m3-surfaceContainerHigh text-m3-onSurfaceVariant hover:text-amber-500'}`}
-                                    title="お気に入りのみ表示"
-                                >
-                                    <span className={`material-symbols-rounded ${favoritesOnly ? 'fill' : ''}`}>star</span>
-                                </button>
+                                <div className="inline-flex rounded-m3-full bg-m3-surfaceContainerHigh p-1 shadow-sm">
+                                    <button
+                                        onClick={() => setSelectedIconFilter('ALL')}
+                                        className={`px-3.5 py-2 rounded-m3-full text-xs font-medium transition-all ${selectedIconFilter === 'ALL' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
+                                        title="すべて表示"
+                                    >
+                                        すべて
+                                    </button>
+                                    <button
+                                        onClick={() => setSelectedIconFilter('gas')}
+                                        className={`px-3 py-2 rounded-m3-full text-xs font-medium transition-all flex items-center gap-1.5 ${selectedIconFilter === 'gas' ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
+                                        title="GASのみ表示"
+                                    >
+                                        <GasIcon className="w-4 h-4" />
+                                        <span className="hidden md:inline">GAS</span>
+                                    </button>
+                                    <button
+                                        onClick={() => setSelectedIconFilter('github')}
+                                        className={`px-3 py-2 rounded-m3-full text-xs font-medium transition-all flex items-center gap-1.5 ${selectedIconFilter === 'github' ? 'bg-[#24292F] text-white shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
+                                        title="GitHubのみ表示"
+                                    >
+                                        <GithubIcon className="w-4 h-4" />
+                                        <span className="hidden md:inline">GitHub</span>
+                                    </button>
+                                </div>
 
                                 <button
                                     onClick={toggleSelectMode}
@@ -1364,17 +1408,17 @@
                                 <div className="inline-flex rounded-m3-full bg-m3-surfaceContainerHigh p-1 shadow-sm">
                                     <button
                                         onClick={() => setViewMode('grid')}
-                                        className={`p-2 rounded-m3-full transition-all ${viewMode === 'grid' ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
+                                        className={`p-2.5 rounded-m3-full transition-all flex items-center justify-center ${viewMode === 'grid' ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
                                         title="グリッド表示"
                                     >
-                                        <span className="material-symbols-rounded text-xl">grid_view</span>
+                                        <span className="material-symbols-rounded text-base leading-none">grid_view</span>
                                     </button>
                                     <button
                                         onClick={() => setViewMode('list')}
-                                        className={`p-2 rounded-m3-full transition-all ${viewMode === 'list' ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
+                                        className={`p-2.5 rounded-m3-full transition-all flex items-center justify-center ${viewMode === 'list' ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
                                         title="リスト表示"
                                     >
-                                        <span className="material-symbols-rounded text-xl">view_list</span>
+                                        <span className="material-symbols-rounded text-base leading-none">view_list</span>
                                     </button>
                                 </div>
                             </div>
@@ -1384,35 +1428,13 @@
                         {filterPanelOpen && (
                             <div className="bg-m3-surfaceContainerLow rounded-m3-xl p-3 mb-5 animate-slide-up">
                                 <div className="flex items-center justify-between mb-2.5">
-                                    <div className="inline-flex rounded-m3-full bg-m3-surfaceContainerHigh p-1 text-xs shadow-sm">
-                                        <button
-                                            onClick={() => setSelectedIconFilter('ALL')}
-                                            className={`px-3.5 py-2 rounded-m3-full font-medium transition-all ${selectedIconFilter === 'ALL' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
-                                        >
-                                            すべて
-                                        </button>
-                                        <button
-                                            onClick={() => setSelectedIconFilter('gas')}
-                                            className={`px-3 py-1.5 rounded-m3-full font-medium transition-all flex items-center gap-1.5 ${selectedIconFilter === 'gas' ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
-                                        >
-                                            <GasIcon className="w-4 h-4" />
-                                            <span>GAS</span>
-                                        </button>
-                                        <button
-                                            onClick={() => setSelectedIconFilter('github')}
-                                            className={`px-3 py-1.5 rounded-m3-full font-medium transition-all flex items-center gap-1.5 ${selectedIconFilter === 'github' ? 'bg-[#24292F] text-white shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
-                                        >
-                                            <GithubIcon className="w-4 h-4" />
-                                            <span>GitHub</span>
-                                        </button>
-                                        <button
-                                            onClick={() => setSelectedIconFilter('other')}
-                                            className={`px-3 py-1.5 rounded-m3-full font-medium transition-all flex items-center gap-1.5 ${selectedIconFilter === 'other' ? 'bg-m3-surfaceVariant text-m3-onSurface shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
-                                        >
-                                            <span className="material-symbols-rounded text-base">apps</span>
-                                            <span>その他</span>
-                                        </button>
-                                    </div>
+                                    <button
+                                        onClick={() => setFavoritesOnly(v => !v)}
+                                        className={`px-4 py-2 rounded-m3-full text-xs md:text-sm font-medium transition-all flex items-center gap-1.5 shadow-sm ${favoritesOnly ? 'bg-amber-400 text-white' : 'bg-m3-surfaceContainerHigh text-m3-onSurfaceVariant hover:text-amber-500'}`}
+                                    >
+                                        <span className={`material-symbols-rounded text-base ${favoritesOnly ? 'fill' : ''}`}>star</span>
+                                        <span>お気に入りのみ</span>
+                                    </button>
 
                                     {activeFilterCount > 0 && (
                                         <button onClick={clearFilters} className="text-xs font-medium text-m3-primary hover:underline flex items-center gap-1 flex-shrink-0 ml-2">
@@ -1517,8 +1539,15 @@
                                             <div className="mb-2">
                                                 <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
                                                     {splitCategories(app.category).map(tag => (
-                                                        <span key={tag} className={`text-[10px] font-bold px-2.5 py-0.5 rounded-m3-s ${categoryColor(tag)}`}>
+                                                        <span key={tag} className={`group/tag inline-flex items-center gap-1 text-[10px] font-bold pl-2.5 pr-1 py-0.5 rounded-m3-s ${categoryColor(tag)}`}>
                                                             {tag}
+                                                            <button
+                                                                onClick={(e) => handleRemoveTagFromApp(app.id, tag, e)}
+                                                                className="w-3.5 h-3.5 flex items-center justify-center rounded-full hover:bg-black/10 dark:hover:bg-white/20 opacity-60 hover:opacity-100 transition-opacity"
+                                                                title={`「${tag}」を削除`}
+                                                            >
+                                                                <span className="material-symbols-rounded text-[11px] leading-none">close</span>
+                                                            </button>
                                                         </span>
                                                     ))}
                                                     {getPlatform(app) === 'gas' && (
@@ -1652,7 +1681,7 @@
                                             </div>
                                             <span className="hidden lg:flex flex-col items-end text-[11px] text-m3-onSurfaceVariant/70 flex-shrink-0 leading-tight">
                                                 <span>{formatRelative(app.lastOpenedAt)}{app.openCount ? `・${app.openCount}回` : ''}</span>
-                                                <span className="opacity-60">登録: {formatDate(app.createdAt)}</span>
+                                                <span className="opacity-60">登録: {formatDate(app.createdAt)}{app.updatedAt && app.updatedAt !== app.createdAt ? ` ／ 更新: ${formatDate(app.updatedAt)}` : ''}</span>
                                             </span>
                                         </div>
 
@@ -1822,8 +1851,8 @@
 //    データ量に上限のないPOSTに変更しています。
 
 const SHEET_NAME = 'Apps';
-const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'cardColor', 'isFavorite', 'createdAt', 'lastOpenedAt', 'openCount'];
-const CODE_VERSION = 'v9-memo-stats-categorymgr-2026-09';
+const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'cardColor', 'isFavorite', 'createdAt', 'updatedAt', 'lastOpenedAt', 'openCount'];
+const CODE_VERSION = 'v10-updatedat-2026-09';
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1891,6 +1920,7 @@ function doGet(e) {
         obj.isFavorite = (obj.isFavorite === true || String(obj.isFavorite).toLowerCase() === 'true');
         obj.createdAt = Number(obj.createdAt) || Date.now();
         obj.lastOpenedAt = Number(obj.lastOpenedAt) || 0;
+        obj.updatedAt = Number(obj.updatedAt) || obj.createdAt;
         obj.openCount = Number(obj.openCount) || 0;
         return obj;
       });
@@ -2609,18 +2639,38 @@ function doPost(e) {
                                 </div>
 
                                 {iconType === 'material' && (
-                                    <div className="mt-2.5 grid grid-cols-6 sm:grid-cols-8 gap-1.5 bg-m3-surface p-2.5 rounded-m3-l max-h-40 overflow-y-auto">
-                                        {MATERIAL_ICON_CHOICES.map((name) => (
-                                            <button
-                                                key={name}
-                                                type="button"
-                                                onClick={() => setMaterialIconName(name)}
-                                                title={name}
-                                                className={`aspect-square flex items-center justify-center rounded-m3-s transition-all ${materialIconName === name ? 'bg-m3-primary text-m3-onPrimary' : 'bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant hover:bg-m3-surfaceVariant'}`}
-                                            >
-                                                <span className="material-symbols-rounded text-lg">{name}</span>
-                                            </button>
-                                        ))}
+                                    <div className="mt-2.5 space-y-2">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-10 h-10 flex-shrink-0 rounded-m3-m bg-m3-primaryContainer text-m3-onPrimaryContainer flex items-center justify-center overflow-hidden">
+                                                <span className="material-symbols-rounded text-xl leading-none">{materialIconName || 'apps'}</span>
+                                            </div>
+                                            <input
+                                                type="text"
+                                                placeholder="アイコン名を直接入力（例: arrow_forward_ios）"
+                                                value={materialIconName}
+                                                onChange={(e) => setMaterialIconName(e.target.value.trim().replace(/\s+/g, '_'))}
+                                                className="flex-1 min-w-0 px-3 py-2 bg-m3-surface text-m3-onSurface rounded-m3-l text-xs outline-none focus:ring-2 focus:ring-m3-primary"
+                                            />
+                                        </div>
+                                        <p className="text-[11px] text-m3-onSurfaceVariant/80">
+                                            <a href="https://fonts.google.com/icons" target="_blank" rel="noopener noreferrer" className="text-m3-primary hover:underline">
+                                                Google Fonts Iconsのサイト
+                                            </a>
+                                            で好きなアイコンを探し、その名前（例: arrow_forward_ios）をそのまま入力できます。よく使うものは下から選ぶこともできます。
+                                        </p>
+                                        <div className="grid grid-cols-6 sm:grid-cols-8 gap-1.5 bg-m3-surface p-2.5 rounded-m3-l max-h-40 overflow-y-auto">
+                                            {MATERIAL_ICON_CHOICES.map((name) => (
+                                                <button
+                                                    key={name}
+                                                    type="button"
+                                                    onClick={() => setMaterialIconName(name)}
+                                                    title={name}
+                                                    className={`aspect-square flex items-center justify-center rounded-m3-s transition-all ${materialIconName === name ? 'bg-m3-primary text-m3-onPrimary' : 'bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant hover:bg-m3-surfaceVariant'}`}
+                                                >
+                                                    <span className="material-symbols-rounded text-lg">{name}</span>
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
                                 )}
 
