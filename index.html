@@ -21,7 +21,36 @@
         :root { --bg-page: #F5F7FC; }
         html.dark { --bg-page: #0D0F13; }
         html, body { background-color: var(--bg-page); margin: 0; }
+
+        /* JS/Tailwind/フォント読み込み前でも即座に表示される、起動アニメーションの土台。
+           Reactが起動したら同じ見た目のスプラッシュに引き継がれ、見た目の変化なく置き換わる。 */
+        #static-splash {
+            position: fixed; inset: 0; z-index: 999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #D1E4FF;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        html.dark #static-splash { background: #00497D; }
+        #static-splash .bubble {
+            width: 80px; height: 80px; border-radius: 32px;
+            background: #0061A4; box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+        }
+        html.dark #static-splash .bubble { background: #9ECAFF; }
+        #static-splash .app-name {
+            margin-top: 20px; font-size: 24px; font-weight: 800; letter-spacing: -0.01em;
+            color: #001D36;
+        }
+        html.dark #static-splash .app-name { color: #D1E4FF; }
+        #static-splash .app-version {
+            margin-top: 4px; font-size: 12px; font-weight: 600; opacity: 0.7;
+            color: #001D36;
+        }
+        html.dark #static-splash .app-version { color: #D1E4FF; }
     </style>
+    <script>
+        // アプリのバージョン表示（起動アニメーションなどで使用）
+        window.__APP_VERSION__ = '2.1.0';
+    </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -187,12 +216,21 @@
     </style>
 </head>
 <body>
-    <div id="root"></div>
+    <div id="root">
+        <div id="static-splash">
+            <div class="bubble"></div>
+            <div class="app-name">アプリハブ</div>
+            <div class="app-version">v<span id="static-splash-version"></span></div>
+        </div>
+    </div>
+    <script>
+        try { document.getElementById('static-splash-version').textContent = window.__APP_VERSION__; } catch (e) {}
+    </script>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        const APP_VERSION = '2.1.0'; // アプリ自体のバージョン（起動画面に表示）
+        const APP_VERSION = window.__APP_VERSION__ || '2.1.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
@@ -467,7 +505,7 @@
             const darkMode = themeMode === 'system' ? systemPrefersDark : themeMode === 'dark';
 
             const [searchQuery, setSearchQuery] = useState('');
-            const [selectedCategory, setSelectedCategory] = useState('ALL');
+            const [selectedCategories, setSelectedCategories] = useState([]);
             const [selectedIconFilter, setSelectedIconFilter] = useState('ALL');
             const [favoritesOnly, setFavoritesOnly] = useState(false);
             const [sortBy, setSortBy] = useState('smart');
@@ -488,6 +526,43 @@
             const [qrApp, setQrApp] = useState(null);
             const [showSplash, setShowSplash] = useState(true);
             const [splashFading, setSplashFading] = useState(false);
+            const [statsOpen, setStatsOpen] = useState(false);
+            const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+            const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+            const [expandedMemoIds, setExpandedMemoIds] = useState([]);
+            const [installPromptEvent, setInstallPromptEvent] = useState(null);
+            const [isInstalled, setIsInstalled] = useState(false);
+
+            useEffect(() => {
+                const onBeforeInstall = (e) => {
+                    e.preventDefault();
+                    setInstallPromptEvent(e);
+                };
+                const onInstalled = () => {
+                    setIsInstalled(true);
+                    setInstallPromptEvent(null);
+                };
+                window.addEventListener('beforeinstallprompt', onBeforeInstall);
+                window.addEventListener('appinstalled', onInstalled);
+                try {
+                    if (window.matchMedia('(display-mode: standalone)').matches) setIsInstalled(true);
+                } catch (e) {}
+                return () => {
+                    window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+                    window.removeEventListener('appinstalled', onInstalled);
+                };
+            }, []);
+
+            const handleInstallClick = async () => {
+                if (!installPromptEvent) return;
+                installPromptEvent.prompt();
+                try { await installPromptEvent.userChoice; } catch (e) {}
+                setInstallPromptEvent(null);
+            };
+
+            const toggleMemo = (id) => {
+                setExpandedMemoIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+            };
 
             // --- 同期の信頼性を保証する送信キュー ---
             // お気に入り・削除・追加/編集はすべて一度ここに積んでからサーバーへ送る。
@@ -527,7 +602,8 @@
                     try {
                         if (op.type === 'save') await CloudApi.save(op.payload);
                         else if (op.type === 'delete') await CloudApi.remove(op.payload.id);
-                        setPendingQueue(prev => prev.filter(p => p.opId !== op.opId));
+                        pendingQueueRef.current = pendingQueueRef.current.filter(p => p.opId !== op.opId);
+                        setPendingQueue(pendingQueueRef.current);
                     } catch (err) {
                         // 1件が失敗しても他の項目（お気に入りなど）の送信を止めない。
                         // 失敗した項目だけキューに残し、次回まとめて再試行する。
@@ -538,10 +614,34 @@
                 setSyncStatus(hadError ? 'error' : 'idle');
             };
 
+            const [splashSyncing, setSplashSyncing] = useState(false);
             useEffect(() => {
-                const t1 = setTimeout(() => setSplashFading(true), 850);
-                const t2 = setTimeout(() => setShowSplash(false), 1250);
-                return () => { clearTimeout(t1); clearTimeout(t2); };
+                let cancelled = false;
+                const MAX_WAIT = 5000; // ネットが遅くても最大5秒で強制的に開く
+                const MIN_SPLASH = 850; // 同期が一瞬で終わってもアニメーションが唐突に見えないための最低表示時間
+
+                const finish = () => {
+                    if (cancelled) return;
+                    setSplashSyncing(false);
+                    setSplashFading(true);
+                    setTimeout(() => { if (!cancelled) setShowSplash(false); }, 400);
+                };
+
+                if (CloudApi.isEnabled()) {
+                    setSplashSyncing(true);
+                    const startedAt = Date.now();
+                    const maxTimer = setTimeout(finish, MAX_WAIT);
+                    syncFromCloud(true).finally(() => {
+                        if (cancelled) return;
+                        clearTimeout(maxTimer);
+                        const remaining = Math.max(MIN_SPLASH - (Date.now() - startedAt), 0);
+                        setTimeout(finish, remaining);
+                    });
+                    return () => { cancelled = true; clearTimeout(maxTimer); };
+                } else {
+                    const t1 = setTimeout(finish, MIN_SPLASH);
+                    return () => { cancelled = true; clearTimeout(t1); };
+                }
             }, []);
             const [undoToast, setUndoToast] = useState(null);
             const pendingDeleteRef = useRef(null);
@@ -638,10 +738,7 @@
                 }
             };
 
-            // 起動時: 未送信の変更を送信 → その後サーバーの最新を取得
-            useEffect(() => {
-                if (CloudApi.isEnabled()) syncFromCloud(true);
-            }, []);
+            // 起動時の同期は起動アニメーション側のuseEffectで実行済み（重複呼び出し防止のためここでは行わない）
 
             // 定期的に未送信キューの再送を試みる（通信が一時的に切れていた場合の自動リカバリ）
             useEffect(() => {
@@ -681,8 +778,8 @@
                         (app.category || '').toLowerCase().includes(q) ||
                         app.url.toLowerCase().includes(q);
 
-                    const matchesCategory = selectedCategory === 'ALL' ||
-                        splitCategories(app.category).includes(selectedCategory);
+                    const matchesCategory = selectedCategories.length === 0 ||
+                        splitCategories(app.category).some(c => selectedCategories.includes(c));
 
                     const matchesIcon = selectedIconFilter === 'ALL' ||
                         (selectedIconFilter === 'gas' && app.iconType === 'gas') ||
@@ -714,27 +811,27 @@
                         list.sort((a, b) => (b.isFavorite ? 1 : 0) - (a.isFavorite ? 1 : 0) || b.createdAt - a.createdAt);
                 }
                 return list;
-            }, [apps, searchQuery, selectedCategory, selectedIconFilter, favoritesOnly, sortBy]);
+            }, [apps, searchQuery, selectedCategories, selectedIconFilter, favoritesOnly, sortBy]);
 
-            const activeFilterCount = (selectedCategory !== 'ALL' ? 1 : 0) + (selectedIconFilter !== 'ALL' ? 1 : 0) + (favoritesOnly ? 1 : 0);
+            const activeFilterCount = (selectedCategories.length > 0 ? 1 : 0) + (selectedIconFilter !== 'ALL' ? 1 : 0) + (favoritesOnly ? 1 : 0);
 
             const clearFilters = () => {
-                setSelectedCategory('ALL');
+                setSelectedCategories([]);
                 setSelectedIconFilter('ALL');
                 setFavoritesOnly(false);
             };
 
             const handleToggleFavorite = (id, e) => {
                 if (e) e.stopPropagation();
-                let updated;
-                setApps(prev => prev.map(a => {
-                    if (a.id === id) {
-                        updated = { ...a, isFavorite: !a.isFavorite };
-                        return updated;
-                    }
-                    return a;
-                }));
-                if (CloudApi.isEnabled() && updated) {
+                // 重要: setAppsに渡す関数の中で`updated`に代入しても、Reactはその関数を
+                // この場ですぐには実行しないため、直後に読むと常にundefinedのままだった
+                // （これがお気に入りが同期されなかった本当の原因）。
+                // 先に現在の値から更新後オブジェクトを作ってから状態更新する。
+                const target = apps.find(a => a.id === id);
+                if (!target) return;
+                const updated = { ...target, isFavorite: !target.isFavorite };
+                setApps(prev => prev.map(a => a.id === id ? updated : a));
+                if (CloudApi.isEnabled()) {
                     enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
                     flushQueue();
                 }
@@ -811,6 +908,50 @@
                 setSelectMode(false);
                 setSelectedIds([]);
                 showToast(`${idsSnapshot.length}件のカテゴリを変更しました`);
+            };
+
+            // カテゴリ名を一括で変更する（他の既存カテゴリ名にリネームすると自動的に統合される）
+            const handleRenameCategory = (oldName, newNameRaw) => {
+                const newName = newNameRaw.trim();
+                if (!newName || newName === oldName) return;
+                const affected = apps.filter(a => splitCategories(a.category).includes(oldName));
+                if (affected.length === 0) return;
+                const rebuild = (categoryStr) => {
+                    const tags = splitCategories(categoryStr).map(t => t === oldName ? newName : t);
+                    return [...new Set(tags)].join(', ');
+                };
+                const updatedApps = affected.map(a => ({ ...a, category: rebuild(a.category) }));
+                setApps(prev => prev.map(a => {
+                    const updated = updatedApps.find(u => u.id === a.id);
+                    return updated || a;
+                }));
+                if (CloudApi.isEnabled()) {
+                    updatedApps.forEach(a => enqueueSync({ opId: genOpId(), type: 'save', payload: a }));
+                    flushQueue();
+                }
+                showToast(`「${oldName}」を「${newName}」に変更しました（${affected.length}件）`);
+            };
+
+            // カテゴリタグを全アプリから削除する（そのカテゴリしか無かったアプリは「その他」になる）
+            const handleDeleteCategory = (name) => {
+                const affected = apps.filter(a => splitCategories(a.category).includes(name));
+                if (affected.length === 0) return;
+                if (!window.confirm(`「${name}」を${affected.length}件のアプリから削除します。よろしいですか？`)) return;
+                const rebuild = (categoryStr) => {
+                    const tags = splitCategories(categoryStr).filter(t => t !== name);
+                    return tags.length > 0 ? tags.join(', ') : 'その他';
+                };
+                const updatedApps = affected.map(a => ({ ...a, category: rebuild(a.category) }));
+                setApps(prev => prev.map(a => {
+                    const updated = updatedApps.find(u => u.id === a.id);
+                    return updated || a;
+                }));
+                if (CloudApi.isEnabled()) {
+                    updatedApps.forEach(a => enqueueSync({ opId: genOpId(), type: 'save', payload: a }));
+                    flushQueue();
+                }
+                if (selectedCategories.includes(name)) setSelectedCategories(prev => prev.filter(c => c !== name));
+                showToast(`「${name}」を削除しました`);
             };
 
             const handleUndoDelete = () => {
@@ -959,6 +1100,7 @@
                                 imageUrl: d.imageUrl || '',
                                 iconName: d.iconName || '',
                                 cardColor: d.cardColor || '',
+                                memo: d.memo || '',
                                 category: d.category || 'その他',
                                 isFavorite: !!d.isFavorite,
                                 createdAt: d.createdAt || Date.now(),
@@ -992,6 +1134,12 @@
                             </div>
                             <h1 className="mt-5 text-2xl font-extrabold text-m3-onPrimaryContainer tracking-tight animate-splash-text">アプリハブ</h1>
                             <p className="mt-1 text-xs font-medium text-m3-onPrimaryContainer/70 animate-splash-text">v{APP_VERSION}</p>
+                            {splashSyncing && (
+                                <div className="mt-5 flex items-center gap-2 text-m3-onPrimaryContainer/80 animate-splash-text">
+                                    <span className="w-4 h-4 border-2 border-m3-onPrimaryContainer/30 border-t-m3-onPrimaryContainer rounded-full animate-spin"></span>
+                                    <span className="text-xs font-medium">スプレッドシートと同期中...</span>
+                                </div>
+                            )}
                         </div>
                     )}
                     <header className="sticky top-0 z-20 bg-m3-surfaceContainer/95 backdrop-blur-md px-4 lg:px-8 py-3.5 transition-colors shadow-sm">
@@ -1008,6 +1156,16 @@
 
                             <div className="flex items-center gap-1.5">
                                 <input type="file" accept="application/json" ref={importInputRef} onChange={handleImportFile} className="hidden" />
+                                {installPromptEvent && !isInstalled && (
+                                    <button
+                                        onClick={handleInstallClick}
+                                        className="hidden lg:flex items-center gap-1.5 px-3.5 py-2 bg-m3-primary text-m3-onPrimary rounded-m3-full text-xs font-bold m3-bounce"
+                                        title="アプリとしてインストール"
+                                    >
+                                        <span className="material-symbols-rounded text-base">install_mobile</span>
+                                        <span>インストール</span>
+                                    </button>
+                                )}
                                 <button
                                     onClick={() => CloudApi.isEnabled() ? syncFromCloud(false) : setSyncModalOpen(true)}
                                     className={`relative p-3 rounded-m3-full transition-colors flex items-center justify-center ${
@@ -1031,33 +1189,82 @@
                                     )}
                                 </button>
                                 <button
-                                    onClick={() => setSyncModalOpen(true)}
-                                    className="hidden md:flex p-3 rounded-m3-full text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHighest transition-colors items-center justify-center"
-                                    title="スプレッドシート同期設定"
-                                >
-                                    <span className="material-symbols-rounded">settings</span>
-                                </button>
-                                <button
-                                    onClick={handleImportClick}
-                                    className="hidden md:flex p-3 rounded-m3-full text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHighest transition-colors items-center justify-center"
-                                    title="バックアップから復元 (JSON)"
-                                >
-                                    <span className="material-symbols-rounded">upload</span>
-                                </button>
-                                <button
-                                    onClick={handleExport}
-                                    className="hidden md:flex p-3 rounded-m3-full text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHighest transition-colors items-center justify-center"
-                                    title="バックアップをダウンロード (JSON)"
-                                >
-                                    <span className="material-symbols-rounded">download</span>
-                                </button>
-                                <button
                                     onClick={() => setThemeMode(prev => prev === 'light' ? 'dark' : prev === 'dark' ? 'system' : 'light')}
-                                    className="p-3 rounded-m3-full text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHighest transition-colors flex items-center justify-center m3-bounce"
+                                    className="hidden sm:flex p-3 rounded-m3-full text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHighest transition-colors items-center justify-center m3-bounce"
                                     title={themeMode === 'light' ? "現在:ライト（クリックでダークへ）" : themeMode === 'dark' ? "現在:ダーク（クリックで端末設定に合わせるへ）" : "現在:端末設定に合わせる（クリックでライトへ）"}
                                 >
                                     <span className="material-symbols-rounded">{themeMode === 'light' ? 'light_mode' : themeMode === 'dark' ? 'dark_mode' : 'brightness_auto'}</span>
                                 </button>
+
+                                <div className="relative">
+                                    <button
+                                        onClick={() => setHeaderMenuOpen(v => !v)}
+                                        className={`p-3 rounded-m3-full transition-colors flex items-center justify-center m3-bounce ${headerMenuOpen ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer' : 'text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHighest'}`}
+                                        title="その他のメニュー"
+                                    >
+                                        <span className="material-symbols-rounded">more_vert</span>
+                                    </button>
+                                    {headerMenuOpen && (
+                                        <>
+                                            <div className="fixed inset-0 z-30" onClick={() => setHeaderMenuOpen(false)}></div>
+                                            <div className="absolute right-0 top-full mt-2 z-40 w-56 bg-m3-surfaceContainerHigh rounded-m3-l shadow-2xl overflow-hidden animate-slide-up py-1.5">
+                                                <button
+                                                    onClick={() => { setThemeMode(prev => prev === 'light' ? 'dark' : prev === 'dark' ? 'system' : 'light'); setHeaderMenuOpen(false); }}
+                                                    className="sm:hidden w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                >
+                                                    <span className="material-symbols-rounded text-lg">{themeMode === 'light' ? 'light_mode' : themeMode === 'dark' ? 'dark_mode' : 'brightness_auto'}</span>
+                                                    表示テーマ切替
+                                                </button>
+                                                {installPromptEvent && !isInstalled && (
+                                                    <button
+                                                        onClick={() => { handleInstallClick(); setHeaderMenuOpen(false); }}
+                                                        className="lg:hidden w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    >
+                                                        <span className="material-symbols-rounded text-lg">install_mobile</span>
+                                                        アプリとしてインストール
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={() => { setStatsOpen(true); setHeaderMenuOpen(false); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                >
+                                                    <span className="material-symbols-rounded text-lg">monitoring</span>
+                                                    統計を見る
+                                                </button>
+                                                <button
+                                                    onClick={() => { setCategoryManagerOpen(true); setHeaderMenuOpen(false); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                >
+                                                    <span className="material-symbols-rounded text-lg">sell</span>
+                                                    カテゴリを管理
+                                                </button>
+                                                <div className="h-px bg-m3-surfaceContainerHighest my-1"></div>
+                                                <button
+                                                    onClick={() => { setSyncModalOpen(true); setHeaderMenuOpen(false); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                >
+                                                    <span className="material-symbols-rounded text-lg">settings</span>
+                                                    スプレッドシート同期設定
+                                                </button>
+                                                <button
+                                                    onClick={() => { handleImportClick(); setHeaderMenuOpen(false); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                >
+                                                    <span className="material-symbols-rounded text-lg">upload</span>
+                                                    バックアップから復元
+                                                </button>
+                                                <button
+                                                    onClick={() => { handleExport(); setHeaderMenuOpen(false); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                >
+                                                    <span className="material-symbols-rounded text-lg">download</span>
+                                                    バックアップをダウンロード
+                                                </button>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+
                                 <button
                                     onClick={openAddModal}
                                     className="hidden sm:flex items-center gap-2 px-5 py-2.5 bg-m3-primary text-m3-onPrimary rounded-m3-full font-medium hover:shadow-md m3-bounce"
@@ -1219,9 +1426,12 @@
                                     {categories.map((cat) => (
                                         <button
                                             key={cat}
-                                            onClick={() => setSelectedCategory(cat)}
+                                            onClick={() => {
+                                                if (cat === 'ALL') { setSelectedCategories([]); return; }
+                                                setSelectedCategories(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
+                                            }}
                                             className={`px-4 py-2 rounded-m3-l text-xs md:text-sm font-medium whitespace-nowrap transition-all ${
-                                                selectedCategory === cat
+                                                (cat === 'ALL' ? selectedCategories.length === 0 : selectedCategories.includes(cat))
                                                     ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm font-bold'
                                                     : 'bg-m3-surfaceContainer text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHigh'
                                             }`}
@@ -1230,6 +1440,9 @@
                                         </button>
                                     ))}
                                 </div>
+                                {selectedCategories.length > 0 && (
+                                    <p className="text-[11px] text-m3-onSurfaceVariant/70 mt-2">複数選択中はいずれかに一致するアプリを表示します（OR条件）</p>
+                                )}
                             </div>
                         )}
 
@@ -1332,41 +1545,57 @@
                                             <p className={`text-xs text-m3-onSurfaceVariant ${CARD_SIZE_CONFIG[cardSize].descLines} mb-4 leading-relaxed`}>
                                                 {app.description || '（説明文未設定）'}
                                             </p>
+
+                                            {app.memo && expandedMemoIds.includes(app.id) && (
+                                                <div
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="mb-4 -mt-2 p-2.5 rounded-m3-l bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 text-xs whitespace-pre-wrap leading-relaxed"
+                                                >
+                                                    {app.memo}
+                                                </div>
+                                            )}
                                         </div>
 
-                                        <div className="pt-3 border-t border-m3-surfaceContainerHighest/50 flex items-center justify-between text-xs text-m3-onSurfaceVariant">
-                                            <div className="flex items-center gap-1">
+                                        <div className="pt-3 border-t border-m3-surfaceContainerHighest/50 flex flex-wrap items-center justify-between gap-2 text-xs text-m3-onSurfaceVariant">
+                                            <div className="flex items-center flex-wrap gap-1.5">
+                                                {app.memo && (
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); toggleMemo(app.id); }}
+                                                        className={`flex items-center justify-center w-9 h-9 rounded-m3-m transition-all m3-bounce ${expandedMemoIds.includes(app.id) ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300' : 'bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
+                                                        title="内部メモを表示/非表示"
+                                                    >
+                                                        <span className="material-symbols-rounded text-lg">edit_note</span>
+                                                    </button>
+                                                )}
                                                 <button
                                                     onClick={(e) => copyToClipboard(app.url, app.title, e)}
-                                                    className="inline-flex items-center gap-1 hover:text-m3-primary py-1 px-2 rounded-m3-s hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="flex items-center justify-center w-9 h-9 rounded-m3-m bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface transition-all m3-bounce"
                                                     title="URLをクリップボードにコピー"
                                                 >
-                                                    <span className="material-symbols-rounded text-sm">content_copy</span>
-                                                    <span>Copy</span>
+                                                    <span className="material-symbols-rounded text-lg">content_copy</span>
                                                 </button>
                                                 {app.editUrl && (
                                                     <button
                                                         onClick={(e) => { e.stopPropagation(); window.open(app.editUrl, '_blank', 'noopener,noreferrer'); }}
-                                                        className="inline-flex items-center gap-1 hover:text-m3-primary py-1 px-2 rounded-m3-s hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                        className="flex items-center justify-center w-9 h-9 rounded-m3-m bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface transition-all m3-bounce"
                                                         title="編集ページを開く"
                                                     >
-                                                        <span className="material-symbols-rounded text-sm">code</span>
-                                                        <span className="hidden sm:inline">編集</span>
+                                                        <span className="material-symbols-rounded text-lg">code</span>
                                                     </button>
                                                 )}
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); setQrApp(app); }}
-                                                    className="inline-flex items-center gap-1 hover:text-m3-primary py-1 px-2 rounded-m3-s hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="flex items-center justify-center w-9 h-9 rounded-m3-m bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface transition-all m3-bounce"
                                                     title="QRコードを表示"
                                                 >
-                                                    <span className="material-symbols-rounded text-sm">qr_code_2</span>
+                                                    <span className="material-symbols-rounded text-lg">qr_code_2</span>
                                                 </button>
                                                 <button
                                                     onClick={(e) => handleShareApp(app, e)}
-                                                    className="inline-flex items-center gap-1 hover:text-m3-primary py-1 px-2 rounded-m3-s hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="hidden sm:flex items-center justify-center w-9 h-9 rounded-m3-m bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface transition-all m3-bounce"
                                                     title="共有"
                                                 >
-                                                    <span className="material-symbols-rounded text-sm">share</span>
+                                                    <span className="material-symbols-rounded text-lg">share</span>
                                                 </button>
                                             </div>
                                             <button
@@ -1430,7 +1659,7 @@
                                         <div className="flex items-center gap-1.5 flex-shrink-0">
                                             <button
                                                 onClick={(e) => copyToClipboard(app.url, app.title, e)}
-                                                className="p-2 text-m3-onSurfaceVariant hover:text-m3-primary rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                className="flex items-center justify-center w-9 h-9 rounded-m3-m bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface transition-all m3-bounce"
                                                 title="URLをコピー"
                                             >
                                                 <span className="material-symbols-rounded text-lg">content_copy</span>
@@ -1438,7 +1667,7 @@
                                             {app.editUrl && (
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); window.open(app.editUrl, '_blank', 'noopener,noreferrer'); }}
-                                                    className="p-2 text-m3-onSurfaceVariant hover:text-m3-primary rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="hidden sm:flex items-center justify-center w-9 h-9 rounded-m3-m bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface transition-all m3-bounce"
                                                     title="編集ページを開く"
                                                 >
                                                     <span className="material-symbols-rounded text-lg">code</span>
@@ -1446,7 +1675,7 @@
                                             )}
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); setQrApp(app); }}
-                                                className="p-2 text-m3-onSurfaceVariant hover:text-m3-primary rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                className="hidden sm:flex items-center justify-center w-9 h-9 rounded-m3-m bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface transition-all m3-bounce"
                                                 title="QRコードを表示"
                                             >
                                                 <span className="material-symbols-rounded text-lg">qr_code_2</span>
@@ -1511,6 +1740,19 @@
 
                     {qrApp && (
                         <QrModal app={qrApp} onClose={() => setQrApp(null)} />
+                    )}
+
+                    {statsOpen && (
+                        <StatsModal apps={apps} onClose={() => setStatsOpen(false)} />
+                    )}
+
+                    {categoryManagerOpen && (
+                        <CategoryManagerModal
+                            apps={apps}
+                            onRename={handleRenameCategory}
+                            onDelete={handleDeleteCategory}
+                            onClose={() => setCategoryManagerOpen(false)}
+                        />
                     )}
 
                     {savingOverlay && (
@@ -1580,8 +1822,8 @@
 //    データ量に上限のないPOSTに変更しています。
 
 const SHEET_NAME = 'Apps';
-const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'category', 'iconType', 'imageUrl', 'iconName', 'cardColor', 'isFavorite', 'createdAt', 'lastOpenedAt', 'openCount'];
-const CODE_VERSION = 'v8-post-save-fix-2026-09';
+const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'cardColor', 'isFavorite', 'createdAt', 'lastOpenedAt', 'openCount'];
+const CODE_VERSION = 'v9-memo-stats-categorymgr-2026-09';
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1717,6 +1959,159 @@ function doPost(e) {
             );
         }
 
+        function StatsModal({ apps, onClose }) {
+            const totalOpens = apps.reduce((sum, a) => sum + (a.openCount || 0), 0);
+            const favoriteCount = apps.filter(a => a.isFavorite).length;
+            const categoryCounts = {};
+            apps.forEach(a => splitCategories(a.category).forEach(tag => {
+                categoryCounts[tag] = (categoryCounts[tag] || 0) + 1;
+            }));
+            const categoryEntries = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1]);
+            const topUsed = [...apps].filter(a => (a.openCount || 0) > 0).sort((a, b) => (b.openCount || 0) - (a.openCount || 0)).slice(0, 5);
+            const maxCategoryCount = categoryEntries.length > 0 ? categoryEntries[0][1] : 1;
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
+                    <div
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-6 py-4.5 bg-m3-surfaceContainerHighest flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                                <span className="material-symbols-rounded text-m3-primary text-2xl">monitoring</span>
+                                <h2 className="text-lg font-bold">統計</h2>
+                            </div>
+                            <button onClick={onClose} className="p-1.5 rounded-m3-full hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant" title="閉じる">
+                                <span className="material-symbols-rounded">close</span>
+                            </button>
+                        </div>
+
+                        <div className="p-6 overflow-y-auto flex-1 space-y-6">
+                            <div className="grid grid-cols-3 gap-3">
+                                <div className="bg-m3-surfaceContainerHighest rounded-m3-l p-4 text-center">
+                                    <p className="text-2xl font-extrabold text-m3-primary">{apps.length}</p>
+                                    <p className="text-[11px] text-m3-onSurfaceVariant mt-1">登録アプリ数</p>
+                                </div>
+                                <div className="bg-m3-surfaceContainerHighest rounded-m3-l p-4 text-center">
+                                    <p className="text-2xl font-extrabold text-amber-500">{favoriteCount}</p>
+                                    <p className="text-[11px] text-m3-onSurfaceVariant mt-1">お気に入り</p>
+                                </div>
+                                <div className="bg-m3-surfaceContainerHighest rounded-m3-l p-4 text-center">
+                                    <p className="text-2xl font-extrabold text-m3-primary">{totalOpens}</p>
+                                    <p className="text-[11px] text-m3-onSurfaceVariant mt-1">合計起動回数</p>
+                                </div>
+                            </div>
+
+                            {topUsed.length > 0 && (
+                                <div>
+                                    <h3 className="text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2.5">よく使うアプリ TOP5</h3>
+                                    <div className="space-y-1.5">
+                                        {topUsed.map((a, i) => (
+                                            <div key={a.id} className="flex items-center gap-2.5 bg-m3-surfaceContainer rounded-m3-l px-3 py-2">
+                                                <span className="text-xs font-bold text-m3-onSurfaceVariant w-4">{i + 1}</span>
+                                                <span className="text-sm font-medium flex-1 truncate">{a.title}</span>
+                                                <span className="text-xs font-bold text-m3-primary flex-shrink-0">{a.openCount}回</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {categoryEntries.length > 0 && (
+                                <div>
+                                    <h3 className="text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2.5">カテゴリ別件数</h3>
+                                    <div className="space-y-2">
+                                        {categoryEntries.map(([tag, count]) => (
+                                            <div key={tag} className="flex items-center gap-2.5">
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-m3-s flex-shrink-0 w-24 truncate text-center ${categoryColor(tag)}`}>{tag}</span>
+                                                <div className="flex-1 h-2.5 bg-m3-surfaceContainerHighest rounded-full overflow-hidden">
+                                                    <div className="h-full bg-m3-primary rounded-full" style={{ width: `${(count / maxCategoryCount) * 100}%` }}></div>
+                                                </div>
+                                                <span className="text-xs font-bold text-m3-onSurfaceVariant w-6 text-right flex-shrink-0">{count}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function CategoryManagerModal({ apps, onRename, onDelete, onClose }) {
+            const categoryCounts = {};
+            apps.forEach(a => splitCategories(a.category).forEach(tag => {
+                categoryCounts[tag] = (categoryCounts[tag] || 0) + 1;
+            }));
+            const categories = Object.keys(categoryCounts).sort((a, b) => a.localeCompare(b, 'ja'));
+            const [editValues, setEditValues] = useState({});
+
+            const handleRenameSubmit = (name) => {
+                const value = editValues[name];
+                if (value === undefined || !value.trim() || value.trim() === name) return;
+                onRename(name, value.trim());
+                setEditValues(prev => ({ ...prev, [name]: undefined }));
+            };
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
+                    <div
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-6 py-4.5 bg-m3-surfaceContainerHighest flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                                <span className="material-symbols-rounded text-m3-primary text-2xl">sell</span>
+                                <h2 className="text-lg font-bold">カテゴリ管理</h2>
+                            </div>
+                            <button onClick={onClose} className="p-1.5 rounded-m3-full hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant" title="閉じる">
+                                <span className="material-symbols-rounded">close</span>
+                            </button>
+                        </div>
+
+                        <div className="p-6 overflow-y-auto flex-1">
+                            {categories.length === 0 ? (
+                                <p className="text-sm text-m3-onSurfaceVariant text-center py-6">まだカテゴリが登録されていません。</p>
+                            ) : (
+                                <div className="space-y-2.5">
+                                    {categories.map((name) => (
+                                        <div key={name} className="flex items-center gap-2 bg-m3-surfaceContainer rounded-m3-l p-2.5">
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-m3-s flex-shrink-0 ${categoryColor(name)}`}>{name}</span>
+                                            <span className="text-[11px] text-m3-onSurfaceVariant flex-shrink-0">{categoryCounts[name]}件</span>
+                                            <input
+                                                type="text"
+                                                placeholder="新しい名前にリネーム"
+                                                value={editValues[name] ?? ''}
+                                                onChange={(e) => setEditValues(prev => ({ ...prev, [name]: e.target.value }))}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') handleRenameSubmit(name); }}
+                                                className="flex-1 min-w-0 px-3 py-1.5 bg-m3-surface text-m3-onSurface rounded-m3-s text-xs outline-none focus:ring-2 focus:ring-m3-primary"
+                                            />
+                                            <button
+                                                onClick={() => handleRenameSubmit(name)}
+                                                className="p-1.5 rounded-m3-s text-m3-primary hover:bg-m3-surfaceContainerHighest flex-shrink-0"
+                                                title="リネーム（既存の別カテゴリ名にすると統合されます）"
+                                            >
+                                                <span className="material-symbols-rounded text-base">check</span>
+                                            </button>
+                                            <button
+                                                onClick={() => onDelete(name)}
+                                                className="p-1.5 rounded-m3-s text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 flex-shrink-0"
+                                                title="このカテゴリを削除"
+                                            >
+                                                <span className="material-symbols-rounded text-base">delete</span>
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-4">※ 既存の別のカテゴリ名にリネームすると、自動的に1つに統合されます。</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         function SyncSettingsModal({ currentUrl, onClose, onSave }) {
             const [url, setUrl] = useState(currentUrl || '');
             const [showCode, setShowCode] = useState(false);
@@ -1739,7 +2134,7 @@ function doPost(e) {
                     return;
                 }
                 setTestState('testing');
-                setTestMessage('');
+                setTestMessage('読み取りを確認中...');
                 try {
                     const res = await fetch(`${trimmed}?action=list`);
                     const text = await res.text();
@@ -1751,8 +2146,33 @@ function doPost(e) {
                         throw new Error('JSONとして解析できない応答が返ってきました（ログイン画面などが返っている可能性があります。アクセス設定が「全員」になっているか確認してください）');
                     }
                     if (data.error) throw new Error(data.error);
+                    const version = data.version || '不明・古いコードの可能性があります';
+
+                    // 読み取りだけでなく、お気に入り等と同じ経路（POSTでの保存）が
+                    // 実際に書き込めるかもここで確認する。テスト用の行はすぐ削除する。
+                    setTestMessage('書き込み（保存）を確認中...');
+                    const testId = '__connection_test__' + Date.now();
+                    const testApp = { id: testId, title: '[接続テスト・自動削除されます]', url: 'https://example.com', category: '', iconType: 'default' };
+                    const saveRes = await fetch(trimmed, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                        body: JSON.stringify({ action: 'save', app: testApp })
+                    });
+                    const saveText = await saveRes.text();
+                    let saveData;
+                    try {
+                        saveData = JSON.parse(saveText);
+                    } catch (e) {
+                        throw new Error('保存(書き込み)の応答が解析できませんでした。GASコードが最新か確認してください。');
+                    }
+                    if (!saveRes.ok || saveData.error || !saveData.success) {
+                        throw new Error('保存(書き込み)のテストに失敗しました: ' + (saveData.error || `HTTP ${saveRes.status}`));
+                    }
+                    // 後片付け
+                    try { await fetch(`${trimmed}?action=delete&id=${encodeURIComponent(testId)}`); } catch (e) {}
+
                     setTestState('success');
-                    setTestMessage(`接続成功：現在 ${Array.isArray(data.apps) ? data.apps.length : 0} 件のアプリが保存されています。（GASコードのバージョン: ${data.version || '不明・古いコードの可能性があります'}）`);
+                    setTestMessage(`接続成功：読み取り・書き込みとも正常に動作しています（現在${Array.isArray(data.apps) ? data.apps.length : 0}件保存中 / GASバージョン: ${version}）`);
                 } catch (err) {
                     setTestState('error');
                     setTestMessage(err.message || String(err));
@@ -1840,8 +2260,8 @@ function doPost(e) {
                                     </button>
                                 </div>
                                 {testMessage && (
-                                    <p className={`text-xs mt-1.5 flex items-start gap-1 ${testState === 'success' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
-                                        <span className="material-symbols-rounded text-sm flex-shrink-0">{testState === 'success' ? 'check_circle' : 'error'}</span>
+                                    <p className={`text-xs mt-1.5 flex items-start gap-1 ${testState === 'success' ? 'text-emerald-600 dark:text-emerald-400' : testState === 'testing' ? 'text-m3-onSurfaceVariant' : 'text-red-500'}`}>
+                                        <span className={`material-symbols-rounded text-sm flex-shrink-0 ${testState === 'testing' ? 'animate-spin' : ''}`}>{testState === 'success' ? 'check_circle' : testState === 'testing' ? 'progress_activity' : 'error'}</span>
                                         <span>{testMessage}</span>
                                     </p>
                                 )}
@@ -1924,17 +2344,18 @@ function doPost(e) {
                 initialDraft?.platform ?? (editingApp?.platform || (editingApp?.iconType === 'gas' ? 'gas' : editingApp?.iconType === 'github' ? 'github' : ''))
             );
             const [cardColor, setCardColor] = useState(() => initialDraft?.cardColor ?? (editingApp?.cardColor || ''));
+            const [memo, setMemo] = useState(() => initialDraft?.memo ?? (editingApp?.memo || ''));
             const [errors, setErrors] = useState({});
             const [draftRestored, setDraftRestored] = useState(!!initialDraft);
 
             // 入力内容を自動的に下書き保存する（誤ってモーダルを閉じても内容が消えないように）
             useEffect(() => {
-                const draft = { title, url, editUrl, version, description, category, iconType, imageUrl, iconName: materialIconName, platform, cardColor };
+                const draft = { title, url, editUrl, version, description, category, iconType, imageUrl, iconName: materialIconName, platform, cardColor, memo };
                 const t = setTimeout(() => {
                     try { localStorage.setItem(draftKey, JSON.stringify(draft)); } catch (e) {}
                 }, 300);
                 return () => clearTimeout(t);
-            }, [title, url, editUrl, version, description, category, iconType, imageUrl, materialIconName, platform, cardColor]);
+            }, [title, url, editUrl, version, description, category, iconType, imageUrl, materialIconName, platform, cardColor, memo]);
 
             const clearDraft = () => {
                 try { localStorage.removeItem(draftKey); } catch (e) {}
@@ -1953,6 +2374,7 @@ function doPost(e) {
                 setMaterialIconName(editingApp?.iconName || 'apps');
                 setPlatform(editingApp?.platform || (editingApp?.iconType === 'gas' ? 'gas' : editingApp?.iconType === 'github' ? 'github' : ''));
                 setCardColor(editingApp?.cardColor || '');
+                setMemo(editingApp?.memo || '');
                 setDraftRestored(false);
             };
 
@@ -2007,7 +2429,8 @@ function doPost(e) {
                     imageUrl: iconType === 'image' ? imageUrl.trim() : '',
                     iconName: iconType === 'material' ? materialIconName : '',
                     platform,
-                    cardColor
+                    cardColor,
+                    memo: memo.trim()
                 });
             };
 
@@ -2332,6 +2755,21 @@ function doPost(e) {
                                     onChange={(e) => setDescription(e.target.value)}
                                     className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-none"
                                 ></textarea>
+                            </div>
+
+                            <div>
+                                <label className="flex items-center gap-1.5 text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
+                                    <span className="material-symbols-rounded text-sm">edit_note</span>
+                                    内部メモ（自分用・任意）
+                                </label>
+                                <textarea
+                                    rows="2"
+                                    placeholder="バグ・TODO・次にやることなど、自分用の作業メモ"
+                                    value={memo}
+                                    onChange={(e) => setMemo(e.target.value)}
+                                    className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-none"
+                                ></textarea>
+                                <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ カードでは折りたたまれており、アイコンをタップした時だけ表示されます。</p>
                             </div>
 
                             <div className="pt-3 border-t border-m3-surfaceContainerHighest flex items-center justify-between gap-2">
