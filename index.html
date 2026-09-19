@@ -49,7 +49,9 @@
     </style>
     <script>
         // アプリのバージョン表示（起動アニメーションなどで使用）
-        window.__APP_VERSION__ = '2.1.0';
+        // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
+        // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
+        window.__APP_VERSION__ = '2.2.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -230,7 +232,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        const APP_VERSION = window.__APP_VERSION__ || '2.1.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
+        const APP_VERSION = window.__APP_VERSION__ || '2.2.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
@@ -521,6 +523,7 @@
             const importInputRef = useRef(null);
             const [apiUrl, setApiUrl] = useState(() => CloudApi.getUrl());
             const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error | offline
+            const [lastSyncedAt, setLastSyncedAt] = useState(0);
             const [syncModalOpen, setSyncModalOpen] = useState(false);
             const [savingOverlay, setSavingOverlay] = useState(false);
             const [qrApp, setQrApp] = useState(null);
@@ -742,12 +745,22 @@
                     const cloudApps = await CloudApi.list();
                     setApps(cloudApps);
                     setSyncStatus('idle');
+                    setLastSyncedAt(Date.now());
                     if (!silent) showToast('スプレッドシートと同期しました');
                 } catch (err) {
                     console.error(err);
                     setSyncStatus('error');
                     if (!silent) showToast('同期に失敗しました。URLや公開設定を確認してください');
                 }
+            };
+
+            // トラブル時の復旧用: ローカルにある内容を全件キューに積んで再送信する
+            const handleForcePushAll = () => {
+                if (!CloudApi.isEnabled()) return;
+                if (!window.confirm(`ローカルの${apps.length}件を全てスプレッドシートに再送信します。スプレッドシート側の内容はこの内容で上書きされます。よろしいですか？`)) return;
+                apps.forEach(a => enqueueSync({ opId: genOpId(), type: 'save', payload: a }));
+                flushQueue();
+                showToast(`${apps.length}件の再送信を開始しました`);
             };
 
             // 起動時の同期は起動アニメーション側のuseEffectで実行済み（重複呼び出し防止のためここでは行わない）
@@ -1233,7 +1246,7 @@
                                     {headerMenuOpen && (
                                         <>
                                             <div className="fixed inset-0 z-30" onClick={() => setHeaderMenuOpen(false)}></div>
-                                            <div className="absolute right-0 top-full mt-2 z-40 w-56 bg-m3-surfaceContainerHigh rounded-m3-l shadow-2xl overflow-hidden animate-slide-up py-1.5">
+                                            <div className="absolute right-0 top-full mt-2 z-40 w-64 bg-m3-surfaceContainerHigh rounded-m3-l shadow-2xl overflow-hidden animate-slide-up py-1.5">
                                                 <button
                                                     onClick={() => { setThemeMode(prev => prev === 'light' ? 'dark' : prev === 'dark' ? 'system' : 'light'); setHeaderMenuOpen(false); }}
                                                     className="sm:hidden w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
@@ -1241,6 +1254,25 @@
                                                     <span className="material-symbols-rounded text-lg">{themeMode === 'light' ? 'light_mode' : themeMode === 'dark' ? 'dark_mode' : 'brightness_auto'}</span>
                                                     表示テーマ切替
                                                 </button>
+                                                <div className="flex items-center justify-between gap-2 px-4 py-2.5">
+                                                    <span className="flex items-center gap-3 text-sm text-m3-onSurface">
+                                                        <span className="material-symbols-rounded text-lg">photo_size_select_large</span>
+                                                        カードサイズ
+                                                    </span>
+                                                    <div className="inline-flex rounded-m3-full bg-m3-surfaceContainerHighest p-0.5">
+                                                        {[['sm', '小'], ['md', '中'], ['lg', '大']].map(([size, label]) => (
+                                                            <button
+                                                                key={size}
+                                                                onClick={() => setCardSize(size)}
+                                                                className={`px-2.5 py-1 rounded-m3-full text-[11px] font-bold transition-all ${cardSize === size ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
+                                                                title={label}
+                                                            >
+                                                                {label}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <div className="h-px bg-m3-surfaceContainerHighest my-1"></div>
                                                 {installPromptEvent && !isInstalled && (
                                                     <button
                                                         onClick={() => { handleInstallClick(); setHeaderMenuOpen(false); }}
@@ -1389,21 +1421,6 @@
                                         <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-m3-primary text-m3-onPrimary text-[9px] font-bold flex items-center justify-center">{activeFilterCount}</span>
                                     )}
                                 </button>
-
-                                {viewMode === 'grid' && (
-                                    <div className="hidden sm:inline-flex rounded-m3-full bg-m3-surfaceContainerHigh p-1 shadow-sm">
-                                        {[['sm', 'カード:小'], ['md', 'カード:中'], ['lg', 'カード:大']].map(([size, label]) => (
-                                            <button
-                                                key={size}
-                                                onClick={() => setCardSize(size)}
-                                                className={`px-2.5 py-2 rounded-m3-full text-[11px] font-bold transition-all ${cardSize === size ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
-                                                title={label}
-                                            >
-                                                {size.toUpperCase()}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
 
                                 <div className="inline-flex rounded-m3-full bg-m3-surfaceContainerHigh p-1 shadow-sm">
                                     <button
@@ -1797,6 +1814,9 @@
                             currentUrl={apiUrl}
                             onClose={() => setSyncModalOpen(false)}
                             onSave={handleSaveApiUrl}
+                            lastSyncedAt={lastSyncedAt}
+                            pendingCount={pendingQueue.length}
+                            onForcePushAll={handleForcePushAll}
                         />
                     )}
 
@@ -1849,10 +1869,15 @@
 // ※ 一覧取得(list)・削除(delete)はGET、保存(save)はPOSTで実装しています。
 //    保存はアプリの情報量が多いとURLの長さ制限に引っかかりGETでは失敗することがあるため、
 //    データ量に上限のないPOSTに変更しています。
+// ※ 重要な修正: 以前は新しい項目を追加するたびに「見出し行の文字だけ」を書き換えており、
+//    その下の既存データは移動していませんでした。そのためアプリを更新するたびに
+//    列がズレて、保存されたはずのデータが違う項目として読み込まれる不具合がありました。
+//    今回から、列の位置ではなく「見出しの名前」で必ず参照する方式に変更したため、
+//    今後アプリ側で項目が増えても既存データがズレることはありません。
 
 const SHEET_NAME = 'Apps';
 const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'cardColor', 'isFavorite', 'createdAt', 'updatedAt', 'lastOpenedAt', 'openCount'];
-const CODE_VERSION = 'v10-updatedat-2026-09';
+const CODE_VERSION = 'v11-namedcolumns-fix-2026-09';
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1862,44 +1887,65 @@ function getSheet_() {
     sheet.appendRow(HEADERS);
     return sheet;
   }
-  // 既存シートに列が足りない場合（アプリ更新で項目が増えた場合）は自動で見出しを追加する
-  const existingHeaders = sheet.getLastColumn() > 0 ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : [];
-  HEADERS.forEach((h, i) => {
-    if (existingHeaders[i] !== h) {
-      sheet.getRange(1, i + 1).setValue(h);
-    }
-  });
+  // 既存シートに無い項目だけを「末尾に新しい列として追加」する。
+  // 既存の列の位置・データは一切変更しない（これが今回の修正の核心）。
+  const lastCol = sheet.getLastColumn();
+  const existingHeaders = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  const missing = HEADERS.filter(h => existingHeaders.indexOf(h) === -1);
+  if (missing.length > 0) {
+    sheet.getRange(1, lastCol + 1, 1, missing.length).setValues([missing]);
+  }
   return sheet;
+}
+
+function getHeaderMap_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = {};
+  headers.forEach((h, i) => { map[h] = i; }); // 0-indexed列番号
+  return map;
 }
 
 function jsonOut_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
-function findRow_(sheet, id) {
+function findRow_(sheet, id, headerMap) {
+  const idCol = headerMap['id'];
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return -1;
-  const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  if (lastRow < 2 || idCol === undefined) return -1;
+  const ids = sheet.getRange(2, idCol + 1, lastRow - 1, 1).getValues();
   for (let i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(id)) return i + 2; // 1-indexed + header row
+    if (String(ids[i][0]) === String(id)) return i + 2; // 1-indexed + 見出し行の分
   }
   return -1;
 }
 
 function saveAppRow_(sheet, app) {
+  const headerMap = getHeaderMap_(sheet);
+  const lastCol = sheet.getLastColumn();
   const id = app.id || Utilities.getUuid();
   const createdAt = app.createdAt || Date.now();
-  const row = HEADERS.map(h => {
-    if (h === 'id') return id;
-    if (h === 'createdAt') return createdAt;
-    if (h === 'isFavorite') return !!app.isFavorite;
-    return app[h] !== undefined ? app[h] : '';
+  const rowIndex = findRow_(sheet, id, headerMap);
+
+  // 既存行がある場合はその行を読み込み、対象の列だけ上書きする（他の列は保持する）
+  const rowValues = rowIndex !== -1
+    ? sheet.getRange(rowIndex, 1, 1, lastCol).getValues()[0]
+    : new Array(lastCol).fill('');
+
+  HEADERS.forEach(h => {
+    const col = headerMap[h];
+    if (col === undefined) return; // 通常は起きないが念のため
+    if (h === 'id') rowValues[col] = id;
+    else if (h === 'createdAt') rowValues[col] = createdAt;
+    else if (h === 'isFavorite') rowValues[col] = !!app.isFavorite;
+    else rowValues[col] = app[h] !== undefined ? app[h] : '';
   });
-  const rowIndex = findRow_(sheet, id);
+
   if (rowIndex === -1) {
-    sheet.appendRow(row);
+    sheet.getRange(sheet.getLastRow() + 1, 1, 1, lastCol).setValues([rowValues]);
   } else {
-    sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
+    sheet.getRange(rowIndex, 1, 1, lastCol).setValues([rowValues]);
   }
   return id;
 }
@@ -1908,22 +1954,27 @@ function doGet(e) {
   e = e || {}; // エディタで直接「実行」した場合はeが渡らないため、その場合でもエラーにならないようにする
   const action = (e.parameter && e.parameter.action) || 'list';
   const sheet = getSheet_();
+  const headerMap = getHeaderMap_(sheet);
 
   if (action === 'list') {
-    const values = sheet.getDataRange().getValues();
-    const headers = values.shift();
-    const apps = values
-      .filter(row => row[0])
-      .map(row => {
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+    const apps = [];
+    if (lastRow > 1) {
+      const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+      values.forEach(row => {
+        const idCol = headerMap['id'];
+        if (idCol === undefined || !row[idCol]) return;
         const obj = {};
-        headers.forEach((h, i) => { obj[h] = row[i]; });
+        HEADERS.forEach(h => { obj[h] = headerMap[h] !== undefined ? row[headerMap[h]] : ''; });
         obj.isFavorite = (obj.isFavorite === true || String(obj.isFavorite).toLowerCase() === 'true');
         obj.createdAt = Number(obj.createdAt) || Date.now();
-        obj.lastOpenedAt = Number(obj.lastOpenedAt) || 0;
         obj.updatedAt = Number(obj.updatedAt) || obj.createdAt;
+        obj.lastOpenedAt = Number(obj.lastOpenedAt) || 0;
         obj.openCount = Number(obj.openCount) || 0;
-        return obj;
+        apps.push(obj);
       });
+    }
     return jsonOut_({ apps: apps, version: CODE_VERSION });
   }
 
@@ -1940,7 +1991,7 @@ function doGet(e) {
 
   if (action === 'delete') {
     try {
-      const rowIndex = findRow_(sheet, e.parameter.id);
+      const rowIndex = findRow_(sheet, e.parameter.id, headerMap);
       if (rowIndex !== -1) sheet.deleteRow(rowIndex);
       return jsonOut_({ success: true });
     } catch (err) {
@@ -2142,7 +2193,7 @@ function doPost(e) {
             );
         }
 
-        function SyncSettingsModal({ currentUrl, onClose, onSave }) {
+        function SyncSettingsModal({ currentUrl, onClose, onSave, lastSyncedAt, pendingCount, onForcePushAll }) {
             const [url, setUrl] = useState(currentUrl || '');
             const [showCode, setShowCode] = useState(false);
             const [copied, setCopied] = useState(false);
@@ -2299,6 +2350,35 @@ function doPost(e) {
                                     空欄で保存すると、これまでどおり端末内保存のみのモードに戻ります。
                                 </p>
                             </div>
+
+                            {currentUrl && (
+                                <div className="bg-m3-surfaceContainerLow rounded-m3-l p-3.5 space-y-2.5">
+                                    <div className="flex items-center justify-between text-xs">
+                                        <span className="text-m3-onSurfaceVariant">最終同期</span>
+                                        <span className="font-medium text-m3-onSurface">{lastSyncedAt ? formatRelative(lastSyncedAt) : 'まだ同期していません'}</span>
+                                    </div>
+                                    {pendingCount > 0 && (
+                                        <div className="flex items-center justify-between text-xs">
+                                            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                                                <span className="material-symbols-rounded text-sm">schedule</span>
+                                                同期待ち
+                                            </span>
+                                            <span className="font-bold text-amber-600 dark:text-amber-400">{pendingCount}件</span>
+                                        </div>
+                                    )}
+                                    <div className="pt-2 border-t border-m3-surfaceContainerHighest">
+                                        <button
+                                            type="button"
+                                            onClick={onForcePushAll}
+                                            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface rounded-m3-l text-xs font-semibold m3-bounce"
+                                        >
+                                            <span className="material-symbols-rounded text-base">cloud_upload</span>
+                                            ローカルの内容を全てスプレッドシートに再送信
+                                        </button>
+                                        <p className="text-[10px] text-m3-onSurfaceVariant/70 mt-1.5">※ データがズレている・消えたと感じた時の復旧用です。この端末にある内容でスプレッドシートを上書きします。</p>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         <div className="px-6 py-4 border-t border-m3-surfaceContainerHighest flex items-center justify-between gap-2">
@@ -2496,21 +2576,23 @@ function doPost(e) {
                         className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="px-6 py-4.5 bg-m3-surfaceContainerHighest flex items-center justify-between">
-                            <div className="flex items-center gap-2.5">
-                                <span className="material-symbols-rounded text-m3-primary text-2xl">
-                                    {editingApp?.id ? 'edit_note' : 'add_link'}
-                                </span>
-                                <h2 className="text-lg font-bold">
+                        <div className="px-6 py-5 bg-m3-primaryContainer text-m3-onPrimaryContainer flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="w-11 h-11 rounded-m3-xl bg-m3-primary text-m3-onPrimary flex items-center justify-center shadow-sm flex-shrink-0">
+                                    <span className="material-symbols-rounded text-2xl">
+                                        {editingApp?.id ? 'edit_note' : 'add_link'}
+                                    </span>
+                                </div>
+                                <h2 className="text-lg font-extrabold tracking-tight">
                                     {editingApp?.id ? 'WEBアプリリンクの編集' : '新しいWEBアプリを追加'}
                                 </h2>
                             </div>
-                            <button onClick={onClose} className="p-1.5 rounded-m3-full hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant" title="閉じる">
+                            <button onClick={onClose} className="p-2 rounded-m3-full hover:bg-black/10 dark:hover:bg-white/10 text-m3-onPrimaryContainer m3-bounce" title="閉じる">
                                 <span className="material-symbols-rounded">close</span>
                             </button>
                         </div>
 
-                        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto flex-1 space-y-5">
+                        <form onSubmit={handleSubmit} className="p-5 overflow-y-auto flex-1 space-y-4 bg-m3-surfaceContainerLow">
                             {draftRestored && (
                                 <div className="flex items-center justify-between gap-2 bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-xs font-medium px-3.5 py-2.5 rounded-m3-l">
                                     <span className="flex items-center gap-1.5">
@@ -2520,7 +2602,7 @@ function doPost(e) {
                                     <button type="button" onClick={discardDraft} className="underline hover:no-underline flex-shrink-0">破棄</button>
                                 </div>
                             )}
-                            <div>
+                            <div className="bg-m3-surfaceContainer rounded-m3-xl p-4 space-y-1.5">
                                 <div className="flex items-center justify-between mb-1.5">
                                     <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider">
                                         WebアプリのURL <span className="text-red-500">*</span>
@@ -2554,10 +2636,8 @@ function doPost(e) {
                                     </p>
                                 )}
                                 <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ GASまたはGitHubのURLを入力するとアイコンが自動判別選択されます。</p>
-                            </div>
 
-                            <div>
-                                <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
+                                <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5 pt-2">
                                     アプリのタイトル <span className="text-red-500">*</span>
                                 </label>
                                 <input
@@ -2570,7 +2650,7 @@ function doPost(e) {
                                 {errors.title && <p className="text-xs text-red-500 mt-1">{errors.title}</p>}
                             </div>
 
-                            <div>
+                            <div className="bg-m3-surfaceContainer rounded-m3-xl p-4">
                                 <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2">
                                     表示アイコンを選択 <span className="text-red-500">*</span>
                                 </label>
@@ -2578,7 +2658,7 @@ function doPost(e) {
                                     <button
                                         type="button"
                                         onClick={() => setIconType('gas')}
-                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left transition-all ${iconType === 'gas' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
+                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left m3-bounce ${iconType === 'gas' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md ring-2 ring-m3-primary' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
                                     >
                                         <AppIconDisplay type="gas" size="sm" />
                                         <div>
@@ -2590,7 +2670,7 @@ function doPost(e) {
                                     <button
                                         type="button"
                                         onClick={() => setIconType('github')}
-                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left transition-all ${iconType === 'github' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
+                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left m3-bounce ${iconType === 'github' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md ring-2 ring-m3-primary' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
                                     >
                                         <AppIconDisplay type="github" size="sm" />
                                         <div>
@@ -2602,7 +2682,7 @@ function doPost(e) {
                                     <button
                                         type="button"
                                         onClick={() => setIconType('image')}
-                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left transition-all ${iconType === 'image' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
+                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left m3-bounce ${iconType === 'image' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md ring-2 ring-m3-primary' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
                                     >
                                         <div className="w-9 h-9 rounded-m3-l bg-m3-surfaceVariant flex items-center justify-center text-m3-onSurface">
                                             <span className="material-symbols-rounded text-lg">image</span>
@@ -2616,7 +2696,7 @@ function doPost(e) {
                                     <button
                                         type="button"
                                         onClick={() => setIconType('default')}
-                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left transition-all ${iconType === 'default' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
+                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left m3-bounce ${iconType === 'default' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md ring-2 ring-m3-primary' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
                                     >
                                         <AppIconDisplay type="default" size="sm" />
                                         <div>
@@ -2628,7 +2708,7 @@ function doPost(e) {
                                     <button
                                         type="button"
                                         onClick={() => setIconType('material')}
-                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left transition-all ${iconType === 'material' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
+                                        className={`flex items-center gap-3 p-3 rounded-m3-xl text-left m3-bounce ${iconType === 'material' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md ring-2 ring-m3-primary' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
                                     >
                                         <AppIconDisplay type="material" iconName={materialIconName || 'apps'} size="sm" />
                                         <div>
@@ -2699,91 +2779,94 @@ function doPost(e) {
                                 )}
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2">
-                                    プラットフォームタグ（任意）
-                                </label>
-                                <div className="inline-flex rounded-m3-full bg-m3-surface p-1 shadow-sm">
-                                    <button
-                                        type="button"
-                                        onClick={() => setPlatform('')}
-                                        className={`px-3.5 py-2 rounded-m3-full text-xs font-medium transition-all ${platform === '' ? 'bg-m3-surfaceContainerHighest text-m3-onSurface font-bold shadow-sm' : 'text-m3-onSurfaceVariant'}`}
-                                    >
-                                        なし
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setPlatform('gas')}
-                                        className={`px-3 py-1.5 rounded-m3-full text-xs font-medium transition-all flex items-center gap-1.5 ${platform === 'gas' ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm font-bold' : 'text-m3-onSurfaceVariant'}`}
-                                    >
-                                        <GasIcon className="w-4 h-4" />
-                                        <span>GAS</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setPlatform('github')}
-                                        className={`px-3 py-1.5 rounded-m3-full text-xs font-medium transition-all flex items-center gap-1.5 ${platform === 'github' ? 'bg-[#24292F] text-white shadow-sm font-bold' : 'text-m3-onSurfaceVariant'}`}
-                                    >
-                                        <GithubIcon className="w-4 h-4" />
-                                        <span>GitHub</span>
-                                    </button>
-                                </div>
-                                <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1.5">※ カードのアイコンとは別に、タイトル横の小さいアイコンとタグとして表示されます（アイコンをGAS/GitHubにしていなくても選べます）。</p>
-                            </div>
-
-                            <div>
-                                <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2">
-                                    カードの色（任意）
-                                </label>
-                                <div className="flex items-center gap-2 flex-wrap">
-                                    {CARD_COLORS.map((c) => (
-                                        <button
-                                            key={c.key || 'none'}
-                                            type="button"
-                                            onClick={() => setCardColor(c.key)}
-                                            title={c.label}
-                                            className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${cardColor === c.key ? 'ring-2 ring-offset-2 ring-m3-primary ring-offset-m3-surfaceContainerHigh scale-110' : ''}`}
-                                            style={{ backgroundColor: c.hex || 'transparent', border: c.hex ? 'none' : '2px dashed var(--m3-on-surface-variant)' }}
-                                        >
-                                            {!c.hex && <span className="material-symbols-rounded text-sm text-m3-onSurfaceVariant">block</span>}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-3">
-                                <div className="col-span-2">
-                                    <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
-                                        カテゴリ / タグ
+                            <div className="bg-m3-surfaceContainer rounded-m3-xl p-4 space-y-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2">
+                                        プラットフォームタグ（任意）
                                     </label>
-                                    <input
-                                        type="text"
-                                        placeholder="例: 自動化, 開発ツール"
-                                        value={category}
-                                        onChange={(e) => setCategory(e.target.value)}
-                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
-                                    />
+                                    <div className="inline-flex rounded-m3-full bg-m3-surface p-1 shadow-sm">
+                                        <button
+                                            type="button"
+                                            onClick={() => setPlatform('')}
+                                            className={`px-3.5 py-2 rounded-m3-full text-xs font-medium m3-bounce ${platform === '' ? 'bg-m3-surfaceContainerHighest text-m3-onSurface font-bold shadow-sm' : 'text-m3-onSurfaceVariant'}`}
+                                        >
+                                            なし
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setPlatform('gas')}
+                                            className={`px-3 py-1.5 rounded-m3-full text-xs font-medium flex items-center gap-1.5 m3-bounce ${platform === 'gas' ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm font-bold ring-2 ring-m3-primary' : 'text-m3-onSurfaceVariant'}`}
+                                        >
+                                            <GasIcon className="w-4 h-4" />
+                                            <span>GAS</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setPlatform('github')}
+                                            className={`px-3 py-1.5 rounded-m3-full text-xs font-medium flex items-center gap-1.5 m3-bounce ${platform === 'github' ? 'bg-[#24292F] text-white shadow-sm font-bold ring-2 ring-m3-primary' : 'text-m3-onSurfaceVariant'}`}
+                                        >
+                                            <GithubIcon className="w-4 h-4" />
+                                            <span>GitHub</span>
+                                        </button>
+                                    </div>
+                                    <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1.5">※ カードのアイコンとは別に、タイトル横の小さいアイコンとタグとして表示されます（アイコンをGAS/GitHubにしていなくても選べます）。</p>
                                 </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2">
+                                        カードの色（任意）
+                                    </label>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        {CARD_COLORS.map((c) => (
+                                            <button
+                                                key={c.key || 'none'}
+                                                type="button"
+                                                onClick={() => setCardColor(c.key)}
+                                                title={c.label}
+                                                className={`w-8 h-8 rounded-full flex items-center justify-center transition-all m3-bounce ${cardColor === c.key ? 'ring-2 ring-offset-2 ring-m3-primary ring-offset-m3-surfaceContainer scale-110' : ''}`}
+                                                style={{ backgroundColor: c.hex || 'transparent', border: c.hex ? 'none' : '2px dashed var(--m3-on-surface-variant)' }}
+                                            >
+                                                {!c.hex && <span className="material-symbols-rounded text-sm text-m3-onSurfaceVariant">block</span>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-3 gap-3">
+                                    <div className="col-span-2">
+                                        <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
+                                            カテゴリ / タグ
+                                        </label>
+                                        <input
+                                            type="text"
+                                            placeholder="例: 自動化, 開発ツール"
+                                            value={category}
+                                            onChange={(e) => setCategory(e.target.value)}
+                                            className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
+                                            バージョン
+                                        </label>
+                                        <input
+                                            type="text"
+                                            placeholder="1.2.0"
+                                            value={version}
+                                            onChange={(e) => setVersion(e.target.value)}
+                                            className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
+                                        />
+                                    </div>
+                                </div>
+                                <p className="text-[11px] text-m3-onSurfaceVariant/80">※ カテゴリはカンマ区切りで複数設定できます。バージョンは任意（例: 1.0.0）。</p>
+                            </div>
+
+                            <div className="bg-m3-surfaceContainer rounded-m3-xl p-4 space-y-4">
                                 <div>
                                     <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
-                                        バージョン
+                                        編集ページのリンク（任意）
                                     </label>
                                     <input
-                                        type="text"
-                                        placeholder="1.2.0"
-                                        value={version}
-                                        onChange={(e) => setVersion(e.target.value)}
-                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
-                                    />
-                                </div>
-                            </div>
-                            <p className="text-[11px] text-m3-onSurfaceVariant/80 -mt-3">※ カテゴリはカンマ区切りで複数設定できます。バージョンは任意（例: 1.0.0）。</p>
-
-                            <div>
-                                <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
-                                    編集ページのリンク（任意）
-                                </label>
-                                <input
                                     type="url"
                                     placeholder="https://script.google.com/home/projects/.../edit"
                                     value={editUrl}
@@ -2792,37 +2875,38 @@ function doPost(e) {
                                 />
                                 {errors.editUrl && <p className="text-xs text-red-500 mt-1">{errors.editUrl}</p>}
                                 <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ GASのスクリプトエディタなど、メンテナンス用のリンクを別に登録できます。カードから直接開けます。</p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
+                                        アプリの概要・説明
+                                    </label>
+                                    <textarea
+                                        rows="3"
+                                        placeholder="アプリの目的や機能についてのメモを記入..."
+                                        value={description}
+                                        onChange={(e) => setDescription(e.target.value)}
+                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-none"
+                                    ></textarea>
+                                </div>
+
+                                <div>
+                                    <label className="flex items-center gap-1.5 text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
+                                        <span className="material-symbols-rounded text-sm">edit_note</span>
+                                        内部メモ（自分用・任意）
+                                    </label>
+                                    <textarea
+                                        rows="2"
+                                        placeholder="バグ・TODO・次にやることなど、自分用の作業メモ"
+                                        value={memo}
+                                        onChange={(e) => setMemo(e.target.value)}
+                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-none"
+                                    ></textarea>
+                                    <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ カードでは折りたたまれており、アイコンをタップした時だけ表示されます。</p>
+                                </div>
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
-                                    アプリの概要・説明
-                                </label>
-                                <textarea
-                                    rows="3"
-                                    placeholder="アプリの目的や機能についてのメモを記入..."
-                                    value={description}
-                                    onChange={(e) => setDescription(e.target.value)}
-                                    className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-none"
-                                ></textarea>
-                            </div>
-
-                            <div>
-                                <label className="flex items-center gap-1.5 text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
-                                    <span className="material-symbols-rounded text-sm">edit_note</span>
-                                    内部メモ（自分用・任意）
-                                </label>
-                                <textarea
-                                    rows="2"
-                                    placeholder="バグ・TODO・次にやることなど、自分用の作業メモ"
-                                    value={memo}
-                                    onChange={(e) => setMemo(e.target.value)}
-                                    className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-none"
-                                ></textarea>
-                                <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ カードでは折りたたまれており、アイコンをタップした時だけ表示されます。</p>
-                            </div>
-
-                            <div className="pt-3 border-t border-m3-surfaceContainerHighest flex items-center justify-between gap-2">
+                            <div className="flex items-center justify-between gap-2 pt-1">
                                 <div>
                                     {editingApp?.id && (
                                         <div className="flex items-center gap-1">
