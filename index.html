@@ -51,7 +51,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.4.0';
+        window.__APP_VERSION__ = '2.5.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -238,7 +238,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        const APP_VERSION = window.__APP_VERSION__ || '2.4.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
+        const APP_VERSION = window.__APP_VERSION__ || '2.5.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
@@ -2535,6 +2535,7 @@ function doPost(e) {
             const [memo, setMemo] = useState(() => initialDraft?.memo ?? (editingApp?.memo || ''));
             const [errors, setErrors] = useState({});
             const [draftRestored, setDraftRestored] = useState(!!initialDraft);
+            const [activeTab, setActiveTab] = useState('basic'); // basic | appearance | details
 
             // 入力内容を自動的に下書き保存する（誤ってモーダルを閉じても内容が消えないように）
             useEffect(() => {
@@ -2600,6 +2601,10 @@ function doPost(e) {
                     newErrors.editUrl = 'http:// または https:// から始まる有効なURLを入力してください';
                 }
                 setErrors(newErrors);
+                // エラーが別タブに隠れて見えなくならないよう、該当タブに切り替える
+                if (newErrors.title || newErrors.url) setActiveTab('basic');
+                else if (newErrors.imageUrl) setActiveTab('appearance');
+                else if (newErrors.editUrl) setActiveTab('details');
                 return Object.keys(newErrors).length === 0;
             };
 
@@ -2682,6 +2687,23 @@ function doPost(e) {
                                     <button type="button" onClick={discardDraft} className="underline hover:no-underline flex-shrink-0">破棄</button>
                                 </div>
                             )}
+                            <div className="sticky -top-5 -mx-5 px-5 pt-1 pb-2 bg-m3-surfaceContainerLow z-10">
+                                <div className="inline-flex w-full rounded-m3-full bg-m3-surfaceContainerHighest p-1">
+                                    {[['basic', '基本情報', 'info'], ['appearance', 'アイコン・見た目', 'palette'], ['details', '詳細', 'tune']].map(([key, label, icon]) => (
+                                        <button
+                                            key={key}
+                                            type="button"
+                                            onClick={() => setActiveTab(key)}
+                                            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-m3-full text-xs font-bold m3-bounce ${activeTab === key ? 'bg-m3-primary text-m3-onPrimary shadow-sm' : 'text-m3-onSurfaceVariant'}`}
+                                        >
+                                            <span className="material-symbols-rounded text-base">{icon}</span>
+                                            <span className="hidden sm:inline">{label}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {activeTab === 'basic' && (
                             <div className="bg-m3-surfaceContainer rounded-m3-xl p-4 space-y-1.5">
                                 <div className="flex items-center justify-between mb-1.5">
                                     <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider">
@@ -2729,7 +2751,9 @@ function doPost(e) {
                                 />
                                 {errors.title && <p className="text-xs text-red-500 mt-1">{errors.title}</p>}
                             </div>
+                            )}
 
+                            {activeTab === 'appearance' && (<>
                             <div className="bg-m3-surfaceContainer rounded-m3-xl p-4">
                                 <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-2">
                                     表示アイコンを選択 <span className="text-red-500">*</span>
@@ -2934,7 +2958,11 @@ function doPost(e) {
                                         ))}
                                     </div>
                                 </div>
+                            </div>
+                            </>)}
 
+                            {activeTab === 'basic' && (<>
+                            <div className="bg-m3-surfaceContainer rounded-m3-xl p-4">
                                 <div className="grid grid-cols-3 gap-3">
                                     <div className="col-span-2">
                                         <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
@@ -2964,6 +2992,23 @@ function doPost(e) {
                                 <p className="text-[11px] text-m3-onSurfaceVariant/80">※ カテゴリはカンマ区切りで複数設定できます。バージョンは任意（例: 1.0.0）。</p>
                             </div>
 
+                            <div className="bg-m3-surfaceContainer rounded-m3-xl p-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
+                                        アプリの概要・説明
+                                    </label>
+                                    <textarea
+                                        rows="3"
+                                        placeholder="アプリの目的や機能についてのメモを記入..."
+                                        value={description}
+                                        onChange={(e) => setDescription(e.target.value)}
+                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-none"
+                                    ></textarea>
+                                </div>
+                            </div>
+                            </>)}
+
+                            {activeTab === 'details' && (
                             <div className="bg-m3-surfaceContainer rounded-m3-xl p-4 space-y-4">
                                 <div>
                                     <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
@@ -2981,19 +3026,6 @@ function doPost(e) {
                                 </div>
 
                                 <div>
-                                    <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
-                                        アプリの概要・説明
-                                    </label>
-                                    <textarea
-                                        rows="3"
-                                        placeholder="アプリの目的や機能についてのメモを記入..."
-                                        value={description}
-                                        onChange={(e) => setDescription(e.target.value)}
-                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-none"
-                                    ></textarea>
-                                </div>
-
-                                <div>
                                     <label className="flex items-center gap-1.5 text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
                                         <span className="material-symbols-rounded text-sm">edit_note</span>
                                         内部メモ（自分用・任意）
@@ -3008,6 +3040,7 @@ function doPost(e) {
                                     <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ カードでは折りたたまれており、アイコンをタップした時だけ表示されます。</p>
                                 </div>
                             </div>
+                            )}
 
                             <div className="flex items-center justify-between gap-2 pt-1">
                                 <div>
