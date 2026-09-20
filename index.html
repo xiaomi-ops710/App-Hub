@@ -51,7 +51,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.2.0';
+        window.__APP_VERSION__ = '2.4.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -187,6 +187,12 @@
             transform: scale(0.9);
         }
 
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+        .animate-float { animation: float 3s ease-in-out infinite; }
+
         /* 起動アニメーション */
         @keyframes splashPop {
             0% { transform: scale(0.3) rotate(-15deg); opacity: 0; }
@@ -232,7 +238,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        const APP_VERSION = window.__APP_VERSION__ || '2.2.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
+        const APP_VERSION = window.__APP_VERSION__ || '2.4.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
@@ -370,12 +376,15 @@
             <span className={`material-symbols-rounded ${className}`}>language</span>
         );
 
-        const AppIconDisplay = ({ type, imageUrl, iconName, size = "md" }) => {
+        const AppIconDisplay = ({ type, imageUrl, iconName, iconBgColor, size = "md" }) => {
             const sizeClasses = {
                 sm: "w-9 h-9 text-base",
                 md: "w-12 h-12 text-xl",
                 lg: "w-16 h-16 text-2xl"
             }[size];
+            const customBg = cardColorHex(iconBgColor); // 同じカラーパレットを再利用
+            const customBgStyle = customBg ? { backgroundColor: customBg } : undefined;
+            const customTextClass = customBg ? 'text-white' : 'text-m3-onPrimaryContainer';
 
             if (type === 'gas') {
                 return (
@@ -394,7 +403,10 @@
             if (type === 'material' && iconName) {
                 const iconTextSize = { sm: 'text-lg', md: 'text-2xl', lg: 'text-3xl' }[size];
                 return (
-                    <div className={`${sizeClasses} flex items-center justify-center rounded-m3-l bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm flex-shrink-0 overflow-hidden`}>
+                    <div
+                        className={`${sizeClasses} flex items-center justify-center rounded-m3-l shadow-sm flex-shrink-0 overflow-hidden ${customBg ? customTextClass : 'bg-m3-primaryContainer text-m3-onPrimaryContainer'}`}
+                        style={customBgStyle}
+                    >
                         <span className={`material-symbols-rounded ${iconTextSize} leading-none`}>{iconName}</span>
                     </div>
                 );
@@ -415,7 +427,10 @@
                 );
             }
             return (
-                <div className={`${sizeClasses} flex items-center justify-center rounded-m3-l bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm flex-shrink-0`}>
+                <div
+                    className={`${sizeClasses} flex items-center justify-center rounded-m3-l shadow-sm flex-shrink-0 ${customBg ? customTextClass : 'bg-m3-primaryContainer text-m3-onPrimaryContainer'}`}
+                    style={customBgStyle}
+                >
                     <GlobeIcon className={size === 'lg' ? 'text-3xl' : 'text-xl'} />
                 </div>
             );
@@ -459,6 +474,29 @@
                 </>
             );
         };
+
+        // アプリ全体のアクセントカラー（テーマカラー）候補。Material 3のトーンパレットに準拠した組み合わせ。
+        const ACCENT_THEMES = {
+            blue: { label: 'ブルー', swatch: '#0061A4',
+                light: { primary: '#0061A4', onPrimary: '#FFFFFF', primaryContainer: '#D1E4FF', onPrimaryContainer: '#001D36' },
+                dark: { primary: '#9ECAFF', onPrimary: '#003258', primaryContainer: '#00497D', onPrimaryContainer: '#D1E4FF' } },
+            purple: { label: 'パープル', swatch: '#6750A4',
+                light: { primary: '#6750A4', onPrimary: '#FFFFFF', primaryContainer: '#EADDFF', onPrimaryContainer: '#21005D' },
+                dark: { primary: '#D0BCFF', onPrimary: '#381E72', primaryContainer: '#4F378B', onPrimaryContainer: '#EADDFF' } },
+            green: { label: 'グリーン', swatch: '#386A20',
+                light: { primary: '#386A20', onPrimary: '#FFFFFF', primaryContainer: '#B7F397', onPrimaryContainer: '#072100' },
+                dark: { primary: '#9CD67D', onPrimary: '#0F3900', primaryContainer: '#205107', onPrimaryContainer: '#B7F397' } },
+            orange: { label: 'オレンジ', swatch: '#8B5000',
+                light: { primary: '#8B5000', onPrimary: '#FFFFFF', primaryContainer: '#FFDDB3', onPrimaryContainer: '#2B1700' },
+                dark: { primary: '#FFB951', onPrimary: '#492900', primaryContainer: '#693C00', onPrimaryContainer: '#FFDDB3' } },
+            pink: { label: 'ピンク', swatch: '#984061',
+                light: { primary: '#984061', onPrimary: '#FFFFFF', primaryContainer: '#FFD9E3', onPrimaryContainer: '#3E001D' },
+                dark: { primary: '#FFB0C8', onPrimary: '#5E1133', primaryContainer: '#7A2949', onPrimaryContainer: '#FFD9E3' } },
+            red: { label: 'レッド', swatch: '#B3261E',
+                light: { primary: '#B3261E', onPrimary: '#FFFFFF', primaryContainer: '#F9DEDC', onPrimaryContainer: '#410E0B' },
+                dark: { primary: '#FFB4AB', onPrimary: '#690005', primaryContainer: '#93000A', onPrimaryContainer: '#FFDAD6' } }
+        };
+        const ACCENT_KEY = 'm3_app_hub_accent';
 
         const formatDate = (ts) => {
             const d = new Date(ts);
@@ -505,6 +543,24 @@
                 try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) { return false; }
             });
             const darkMode = themeMode === 'system' ? systemPrefersDark : themeMode === 'dark';
+
+            const [accentKey, setAccentKey] = useState(() => {
+                try {
+                    const saved = localStorage.getItem(ACCENT_KEY);
+                    return ACCENT_THEMES[saved] ? saved : 'blue';
+                } catch (e) { return 'blue'; }
+            });
+
+            useEffect(() => {
+                const theme = ACCENT_THEMES[accentKey] || ACCENT_THEMES.blue;
+                const vars = darkMode ? theme.dark : theme.light;
+                const root = document.documentElement.style;
+                root.setProperty('--m3-primary', vars.primary);
+                root.setProperty('--m3-on-primary', vars.onPrimary);
+                root.setProperty('--m3-primary-container', vars.primaryContainer);
+                root.setProperty('--m3-on-primary-container', vars.onPrimaryContainer);
+                try { localStorage.setItem(ACCENT_KEY, accentKey); } catch (e) {}
+            }, [accentKey, darkMode]);
 
             const [searchQuery, setSearchQuery] = useState('');
             const [selectedCategories, setSelectedCategories] = useState([]);
@@ -1138,6 +1194,7 @@
                                 imageUrl: d.imageUrl || '',
                                 iconName: d.iconName || '',
                                 cardColor: d.cardColor || '',
+                                iconBgColor: d.iconBgColor || '',
                                 memo: d.memo || '',
                                 category: d.category || 'その他',
                                 isFavorite: !!d.isFavorite,
@@ -1187,9 +1244,9 @@
                                 <div className="p-2.5 rounded-m3-xl bg-m3-primaryContainer text-m3-onPrimaryContainer flex items-center justify-center shadow-sm">
                                     <span className="material-symbols-rounded text-2xl">grid_view</span>
                                 </div>
-                                <div>
-                                    <h1 className="text-2xl font-extrabold text-m3-onSurface leading-tight tracking-tight">アプリハブ</h1>
-                                    <p className="text-xs text-m3-onSurfaceVariant">自作WEBアプリ リンクギャラリー・{apps.length}件登録中</p>
+                                <div className="min-w-0">
+                                    <h1 className="text-lg sm:text-2xl font-extrabold text-m3-onSurface leading-tight tracking-tight truncate">アプリハブ</h1>
+                                    <p className="hidden sm:block text-xs text-m3-onSurfaceVariant truncate">自作WEBアプリ リンクギャラリー・{apps.length}件登録中</p>
                                 </div>
                             </div>
 
@@ -1272,6 +1329,25 @@
                                                         ))}
                                                     </div>
                                                 </div>
+                                                <div className="px-4 py-2.5">
+                                                    <span className="flex items-center gap-3 text-sm text-m3-onSurface mb-2">
+                                                        <span className="material-symbols-rounded text-lg">palette</span>
+                                                        テーマカラー
+                                                    </span>
+                                                    <div className="flex items-center gap-2 flex-wrap pl-8">
+                                                        {Object.entries(ACCENT_THEMES).map(([key, theme]) => (
+                                                            <button
+                                                                key={key}
+                                                                onClick={() => setAccentKey(key)}
+                                                                title={theme.label}
+                                                                className={`w-7 h-7 rounded-full flex items-center justify-center m3-bounce ${accentKey === key ? 'ring-2 ring-offset-2 ring-m3-onSurface ring-offset-m3-surfaceContainerHigh scale-110' : ''}`}
+                                                                style={{ backgroundColor: theme.swatch }}
+                                                            >
+                                                                {accentKey === key && <span className="material-symbols-rounded text-sm text-white">check</span>}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
                                                 <div className="h-px bg-m3-surfaceContainerHighest my-1"></div>
                                                 {installPromptEvent && !isInstalled && (
                                                     <button
@@ -1347,7 +1423,7 @@
                                     placeholder="アプリ名・説明・カテゴリ・URLで検索... ( / でフォーカス)"
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
-                                    className="w-full pl-12 pr-10 py-3.5 bg-m3-surfaceContainerHigh text-m3-onSurface rounded-m3-2xl focus:ring-2 focus:ring-m3-primary outline-none transition-all placeholder:text-m3-onSurfaceVariant/70 text-sm md:text-base shadow-sm"
+                                    className="w-full pl-12 pr-10 py-3.5 bg-m3-surfaceContainerHigh text-m3-onSurface rounded-m3-3xl focus:ring-2 focus:ring-m3-primary outline-none transition-all placeholder:text-m3-onSurfaceVariant/70 text-sm md:text-base shadow-sm"
                                 />
                                 {searchQuery && (
                                     <button
@@ -1359,7 +1435,7 @@
                                 )}
                             </div>
 
-                            <div className="flex items-center gap-2 flex-shrink-0">
+                            <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
                                 <div className="relative">
                                     <select
                                         value={sortBy}
@@ -1490,8 +1566,8 @@
                         </div>
 
                         {filteredApps.length === 0 ? (
-                            <div className="py-20 text-center flex flex-col items-center justify-center text-m3-onSurfaceVariant bg-m3-surfaceContainerLow rounded-m3-2xl p-8">
-                                <span className="material-symbols-rounded text-6xl mb-3 opacity-40">search_off</span>
+                            <div className="py-20 text-center flex flex-col items-center justify-center text-m3-onSurfaceVariant bg-m3-surfaceContainerLow rounded-m3-3xl p-8">
+                                <span className="material-symbols-rounded text-6xl mb-3 opacity-40 animate-float">search_off</span>
                                 <p className="text-base font-medium">該当するアプリが見つかりませんでした</p>
                                 <p className="text-xs text-m3-onSurfaceVariant/80 mt-1">検索キーワードやフィルターを変更するか、新しいアプリを追加してください。</p>
                                 <div className="flex items-center gap-2 mt-5">
@@ -1533,7 +1609,7 @@
                                         )}
                                         <div>
                                             <div className="flex items-start justify-between gap-3 mb-3">
-                                                <AppIconDisplay type={app.iconType} imageUrl={app.imageUrl} iconName={app.iconName} size={CARD_SIZE_CONFIG[cardSize].iconSize} />
+                                                <AppIconDisplay type={app.iconType} imageUrl={app.imageUrl} iconName={app.iconName} iconBgColor={app.iconBgColor} size={CARD_SIZE_CONFIG[cardSize].iconSize} />
                                                 <div className="flex items-center gap-1">
                                                     <button
                                                         onClick={(e) => handleToggleFavorite(app.id, e)}
@@ -1673,7 +1749,7 @@
                                             </div>
                                         )}
                                         <div className="flex items-center gap-3.5 min-w-0 flex-1">
-                                            <AppIconDisplay type={app.iconType} imageUrl={app.imageUrl} iconName={app.iconName} size="sm" />
+                                            <AppIconDisplay type={app.iconType} imageUrl={app.imageUrl} iconName={app.iconName} iconBgColor={app.iconBgColor} size="sm" />
                                             <div className="min-w-0 flex-1">
                                                 <div className="flex items-center gap-2">
                                                     {getPlatform(app) === 'gas' && <GasIcon className="w-4 h-4 flex-shrink-0" />}
@@ -1876,8 +1952,8 @@
 //    今後アプリ側で項目が増えても既存データがズレることはありません。
 
 const SHEET_NAME = 'Apps';
-const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'cardColor', 'isFavorite', 'createdAt', 'updatedAt', 'lastOpenedAt', 'openCount'];
-const CODE_VERSION = 'v11-namedcolumns-fix-2026-09';
+const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'iconBgColor', 'cardColor', 'isFavorite', 'createdAt', 'updatedAt', 'lastOpenedAt', 'openCount'];
+const CODE_VERSION = 'v12-iconbgcolor-2026-09';
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -2170,14 +2246,14 @@ function doPost(e) {
                                             />
                                             <button
                                                 onClick={() => handleRenameSubmit(name)}
-                                                className="p-1.5 rounded-m3-s text-m3-primary hover:bg-m3-surfaceContainerHighest flex-shrink-0"
+                                                className="w-8 h-8 flex items-center justify-center rounded-m3-m bg-m3-primaryContainer text-m3-onPrimaryContainer m3-bounce flex-shrink-0"
                                                 title="リネーム（既存の別カテゴリ名にすると統合されます）"
                                             >
                                                 <span className="material-symbols-rounded text-base">check</span>
                                             </button>
                                             <button
                                                 onClick={() => onDelete(name)}
-                                                className="p-1.5 rounded-m3-s text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 flex-shrink-0"
+                                                className="w-8 h-8 flex items-center justify-center rounded-m3-m text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 m3-bounce flex-shrink-0"
                                                 title="このカテゴリを削除"
                                             >
                                                 <span className="material-symbols-rounded text-base">delete</span>
@@ -2297,19 +2373,20 @@ function doPost(e) {
                                 <button
                                     type="button"
                                     onClick={() => setShowCode(v => !v)}
-                                    className="flex items-center gap-1.5 text-m3-primary text-xs font-semibold hover:underline"
+                                    className={`flex items-center gap-2 px-4 py-2.5 rounded-m3-full text-sm font-bold m3-bounce ${showCode ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer' : 'bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant hover:bg-m3-surfaceVariant'}`}
                                 >
-                                    <span className="material-symbols-rounded text-base">{showCode ? 'expand_less' : 'code'}</span>
+                                    <span className="material-symbols-rounded text-lg">{showCode ? 'expand_less' : 'code'}</span>
                                     <span>{showCode ? 'コードを隠す' : 'GASコードを表示してコピー'}</span>
                                 </button>
                                 {showCode && (
-                                    <div className="mt-2 relative">
-                                        <pre className="text-[10px] leading-relaxed bg-m3-surface text-m3-onSurface rounded-m3-l p-3 overflow-x-auto max-h-56 whitespace-pre">{GAS_CODE_SNIPPET}</pre>
+                                    <div className="mt-3 relative">
+                                        <pre className="text-[11px] leading-relaxed bg-m3-surface text-m3-onSurface rounded-m3-xl p-4 pt-14 overflow-x-auto max-h-64 whitespace-pre shadow-inner">{GAS_CODE_SNIPPET}</pre>
                                         <button
                                             type="button"
                                             onClick={handleCopyCode}
-                                            className="absolute top-2 right-2 px-2.5 py-1 bg-m3-primaryContainer text-m3-onPrimaryContainer rounded-m3-full text-[10px] font-bold shadow-sm"
+                                            className={`absolute top-3 right-3 flex items-center gap-1.5 px-4 py-2.5 rounded-m3-full text-xs font-bold shadow-md m3-bounce ${copied ? 'bg-emerald-500 text-white' : 'bg-m3-primary text-m3-onPrimary'}`}
                                         >
+                                            <span className="material-symbols-rounded text-base">{copied ? 'check' : 'content_copy'}</span>
                                             {copied ? 'コピー済み' : 'コピー'}
                                         </button>
                                     </div>
@@ -2320,24 +2397,24 @@ function doPost(e) {
                                 <label className="block text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
                                     GAS WebアプリのURL
                                 </label>
-                                <div className="flex gap-1.5">
+                                <div className="flex flex-col sm:flex-row gap-2">
                                     <input
                                         type="url"
                                         placeholder="https://script.google.com/macros/s/.../exec"
                                         value={url}
                                         onChange={(e) => setUrl(e.target.value)}
-                                        className="flex-1 min-w-0 px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm"
+                                        className="flex-1 min-w-0 px-4 py-3.5 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm sm:text-base"
                                     />
                                     <button
                                         type="button"
                                         onClick={handleTestConnection}
                                         disabled={testState === 'testing'}
-                                        className="px-3.5 py-2 bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant rounded-m3-l text-xs font-semibold hover:bg-m3-surfaceVariant transition-colors flex items-center gap-1 flex-shrink-0 disabled:opacity-60"
+                                        className="px-4 py-3.5 bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant rounded-m3-l text-sm font-bold hover:bg-m3-surfaceVariant flex items-center justify-center gap-1.5 flex-shrink-0 disabled:opacity-60 m3-bounce"
                                     >
-                                        <span className={`material-symbols-rounded text-base ${testState === 'testing' ? 'animate-spin' : ''}`}>
+                                        <span className={`material-symbols-rounded text-lg ${testState === 'testing' ? 'animate-spin' : ''}`}>
                                             {testState === 'testing' ? 'progress_activity' : 'wifi_tethering'}
                                         </span>
-                                        <span className="hidden sm:inline">接続テスト</span>
+                                        <span>接続テスト</span>
                                     </button>
                                 </div>
                                 {testMessage && (
@@ -2454,18 +2531,19 @@ function doPost(e) {
                 initialDraft?.platform ?? (editingApp?.platform || (editingApp?.iconType === 'gas' ? 'gas' : editingApp?.iconType === 'github' ? 'github' : ''))
             );
             const [cardColor, setCardColor] = useState(() => initialDraft?.cardColor ?? (editingApp?.cardColor || ''));
+            const [iconBgColor, setIconBgColor] = useState(() => initialDraft?.iconBgColor ?? (editingApp?.iconBgColor || ''));
             const [memo, setMemo] = useState(() => initialDraft?.memo ?? (editingApp?.memo || ''));
             const [errors, setErrors] = useState({});
             const [draftRestored, setDraftRestored] = useState(!!initialDraft);
 
             // 入力内容を自動的に下書き保存する（誤ってモーダルを閉じても内容が消えないように）
             useEffect(() => {
-                const draft = { title, url, editUrl, version, description, category, iconType, imageUrl, iconName: materialIconName, platform, cardColor, memo };
+                const draft = { title, url, editUrl, version, description, category, iconType, imageUrl, iconName: materialIconName, platform, cardColor, memo, iconBgColor };
                 const t = setTimeout(() => {
                     try { localStorage.setItem(draftKey, JSON.stringify(draft)); } catch (e) {}
                 }, 300);
                 return () => clearTimeout(t);
-            }, [title, url, editUrl, version, description, category, iconType, imageUrl, materialIconName, platform, cardColor, memo]);
+            }, [title, url, editUrl, version, description, category, iconType, imageUrl, materialIconName, platform, cardColor, memo, iconBgColor]);
 
             const clearDraft = () => {
                 try { localStorage.removeItem(draftKey); } catch (e) {}
@@ -2484,6 +2562,7 @@ function doPost(e) {
                 setMaterialIconName(editingApp?.iconName || 'apps');
                 setPlatform(editingApp?.platform || (editingApp?.iconType === 'gas' ? 'gas' : editingApp?.iconType === 'github' ? 'github' : ''));
                 setCardColor(editingApp?.cardColor || '');
+                setIconBgColor(editingApp?.iconBgColor || '');
                 setMemo(editingApp?.memo || '');
                 setDraftRestored(false);
             };
@@ -2540,6 +2619,7 @@ function doPost(e) {
                     iconName: iconType === 'material' ? materialIconName : '',
                     platform,
                     cardColor,
+                    iconBgColor,
                     memo: memo.trim()
                 });
             };
@@ -2698,7 +2778,7 @@ function doPost(e) {
                                         onClick={() => setIconType('default')}
                                         className={`flex items-center gap-3 p-3 rounded-m3-xl text-left m3-bounce ${iconType === 'default' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md ring-2 ring-m3-primary' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
                                     >
-                                        <AppIconDisplay type="default" size="sm" />
+                                        <AppIconDisplay type="default" iconBgColor={iconBgColor} size="sm" />
                                         <div>
                                             <p className="text-xs font-bold">標準Webアイコン</p>
                                             <p className="text-[10px] opacity-80">汎用地球儀</p>
@@ -2710,7 +2790,7 @@ function doPost(e) {
                                         onClick={() => setIconType('material')}
                                         className={`flex items-center gap-3 p-3 rounded-m3-xl text-left m3-bounce ${iconType === 'material' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer font-bold shadow-md ring-2 ring-m3-primary' : 'bg-m3-surface hover:bg-m3-surfaceContainerHighest text-m3-onSurface'}`}
                                     >
-                                        <AppIconDisplay type="material" iconName={materialIconName || 'apps'} size="sm" />
+                                        <AppIconDisplay type="material" iconName={materialIconName || 'apps'} iconBgColor={iconBgColor} size="sm" />
                                         <div>
                                             <p className="text-xs font-bold">アイコンを選択</p>
                                             <p className="text-[10px] opacity-80">Material Symbols</p>
@@ -2721,7 +2801,10 @@ function doPost(e) {
                                 {iconType === 'material' && (
                                     <div className="mt-2.5 space-y-2">
                                         <div className="flex items-center gap-2">
-                                            <div className="w-10 h-10 flex-shrink-0 rounded-m3-m bg-m3-primaryContainer text-m3-onPrimaryContainer flex items-center justify-center overflow-hidden">
+                                            <div
+                                                className={`w-10 h-10 flex-shrink-0 rounded-m3-m flex items-center justify-center overflow-hidden ${cardColorHex(iconBgColor) ? 'text-white' : 'bg-m3-primaryContainer text-m3-onPrimaryContainer'}`}
+                                                style={cardColorHex(iconBgColor) ? { backgroundColor: cardColorHex(iconBgColor) } : undefined}
+                                            >
                                                 <span className="material-symbols-rounded text-xl leading-none">{materialIconName || 'apps'}</span>
                                             </div>
                                             <input
@@ -2748,6 +2831,26 @@ function doPost(e) {
                                                     className={`aspect-square flex items-center justify-center rounded-m3-s transition-all ${materialIconName === name ? 'bg-m3-primary text-m3-onPrimary' : 'bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant hover:bg-m3-surfaceVariant'}`}
                                                 >
                                                     <span className="material-symbols-rounded text-lg">{name}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {(iconType === 'default' || iconType === 'material') && (
+                                    <div className="mt-3">
+                                        <p className="text-[11px] font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">アイコンの背景色</p>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            {CARD_COLORS.map((c) => (
+                                                <button
+                                                    key={c.key || 'none'}
+                                                    type="button"
+                                                    onClick={() => setIconBgColor(c.key)}
+                                                    title={c.key === '' ? 'デフォルト（青）' : c.label}
+                                                    className={`w-8 h-8 rounded-full flex items-center justify-center m3-bounce ${iconBgColor === c.key ? 'ring-2 ring-offset-2 ring-m3-primary ring-offset-m3-surfaceContainerHigh scale-110' : ''}`}
+                                                    style={{ backgroundColor: c.hex || 'var(--m3-primary-container)', border: 'none' }}
+                                                >
+                                                    {c.key === '' && <span className="material-symbols-rounded text-sm text-m3-onPrimaryContainer">auto_awesome</span>}
                                                 </button>
                                             ))}
                                         </div>
