@@ -51,7 +51,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.5.0';
+        window.__APP_VERSION__ = '2.6.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -238,7 +238,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        const APP_VERSION = window.__APP_VERSION__ || '2.5.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
+        const APP_VERSION = window.__APP_VERSION__ || '2.6.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
@@ -634,6 +634,7 @@
             });
             const pendingQueueRef = useRef(pendingQueue);
             const isFlushingRef = useRef(false);
+            const lastSyncErrorRef = useRef('');
 
             useEffect(() => {
                 pendingQueueRef.current = pendingQueue;
@@ -667,6 +668,7 @@
                         // 1件が失敗しても他の項目（お気に入りなど）の送信を止めない。
                         // 失敗した項目だけキューに残し、次回まとめて再試行する。
                         hadError = true;
+                        lastSyncErrorRef.current = (err && err.message) ? err.message : String(err);
                     }
                 }
                 isFlushingRef.current = false;
@@ -1102,7 +1104,8 @@
 
                 const stillPending = pendingQueueRef.current.some(p => p.payload.id === savedApp.id);
                 if (stillPending) {
-                    showToast('保存しました（通信状況により同期待ちです。自動的に再送されます）', 5000);
+                    const reason = lastSyncErrorRef.current ? `（原因: ${lastSyncErrorRef.current}）` : '';
+                    showToast(`端末には保存しましたが、スプレッドシートへの送信はまだ完了していません${reason}。自動的に再送されます。`, 7000);
                 } else {
                     showToast(isNew ? '新しいアプリを追加し、スプレッドシートに保存しました' : 'アプリ情報を更新し、スプレッドシートに保存しました');
                 }
@@ -1543,7 +1546,9 @@
                                             key={cat}
                                             onClick={() => {
                                                 if (cat === 'ALL') { setSelectedCategories([]); return; }
-                                                setSelectedCategories(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
+                                                // タップしたカテゴリだけを選択（前のカテゴリは自動的に外れる）。
+                                                // 同じものをもう一度押すと選択解除。
+                                                setSelectedCategories(prev => (prev.length === 1 && prev[0] === cat) ? [] : [cat]);
                                             }}
                                             className={`px-4 py-2 rounded-m3-l text-xs md:text-sm font-medium whitespace-nowrap transition-all ${
                                                 (cat === 'ALL' ? selectedCategories.length === 0 : selectedCategories.includes(cat))
@@ -1556,7 +1561,7 @@
                                     ))}
                                 </div>
                                 {selectedCategories.length > 0 && (
-                                    <p className="text-[11px] text-m3-onSurfaceVariant/70 mt-2">複数選択中はいずれかに一致するアプリを表示します（OR条件）</p>
+                                    <p className="text-[11px] text-m3-onSurfaceVariant/70 mt-2">もう一度押すと選択を解除します</p>
                                 )}
                             </div>
                         )}
@@ -1827,7 +1832,7 @@
                     {!selectMode && (
                         <button
                             onClick={openAddModal}
-                            className="fixed bottom-6 right-6 z-30 w-16 h-16 bg-m3-primaryContainer text-m3-onPrimaryContainer rounded-m3-3xl shadow-xl flex items-center justify-center hover:shadow-2xl hover:-translate-y-0.5 m3-bounce"
+                            className="sm:hidden fixed bottom-6 right-6 z-30 w-16 h-16 bg-m3-primaryContainer text-m3-onPrimaryContainer rounded-m3-3xl shadow-xl flex items-center justify-center hover:shadow-2xl hover:-translate-y-0.5 m3-bounce"
                             aria-label="アプリを追加"
                         >
                             <span className="material-symbols-rounded text-3xl">add</span>
@@ -1891,6 +1896,7 @@
                             onClose={() => setSyncModalOpen(false)}
                             onSave={handleSaveApiUrl}
                             lastSyncedAt={lastSyncedAt}
+                            lastSyncError={lastSyncErrorRef.current}
                             pendingCount={pendingQueue.length}
                             onForcePushAll={handleForcePushAll}
                         />
@@ -2269,7 +2275,7 @@ function doPost(e) {
             );
         }
 
-        function SyncSettingsModal({ currentUrl, onClose, onSave, lastSyncedAt, pendingCount, onForcePushAll }) {
+        function SyncSettingsModal({ currentUrl, onClose, onSave, lastSyncedAt, pendingCount, onForcePushAll, lastSyncError }) {
             const [url, setUrl] = useState(currentUrl || '');
             const [showCode, setShowCode] = useState(false);
             const [copied, setCopied] = useState(false);
@@ -2435,12 +2441,17 @@ function doPost(e) {
                                         <span className="font-medium text-m3-onSurface">{lastSyncedAt ? formatRelative(lastSyncedAt) : 'まだ同期していません'}</span>
                                     </div>
                                     {pendingCount > 0 && (
-                                        <div className="flex items-center justify-between text-xs">
-                                            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                                                <span className="material-symbols-rounded text-sm">schedule</span>
-                                                同期待ち
-                                            </span>
-                                            <span className="font-bold text-amber-600 dark:text-amber-400">{pendingCount}件</span>
+                                        <div className="text-xs">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                                                    <span className="material-symbols-rounded text-sm">schedule</span>
+                                                    同期待ち
+                                                </span>
+                                                <span className="font-bold text-amber-600 dark:text-amber-400">{pendingCount}件</span>
+                                            </div>
+                                            {lastSyncError && (
+                                                <p className="text-[10px] text-red-500 mt-1">直近のエラー: {lastSyncError}</p>
+                                            )}
                                         </div>
                                     )}
                                     <div className="pt-2 border-t border-m3-surfaceContainerHighest">
