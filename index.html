@@ -51,7 +51,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.6.0';
+        window.__APP_VERSION__ = '2.7.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -238,11 +238,14 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        const APP_VERSION = window.__APP_VERSION__ || '2.6.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
+        const APP_VERSION = window.__APP_VERSION__ || '2.7.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
         const PENDING_QUEUE_KEY = 'm3_app_hub_pending_queue';
+        // GASコードのバージョン。GAS_CODE_SNIPPET内のCODE_VERSIONと必ず同じ値に保つこと。
+        // 一致しない場合、古いGASコードのまま（新しい項目が保存されない等の原因）と判断して警告を出す。
+        const EXPECTED_GAS_VERSION = 'v12-iconbgcolor-2026-09';
         const genOpId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         // --- GAS(Firebase連携)APIクライアント ---
@@ -267,7 +270,7 @@
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
-                return data.apps || [];
+                return { apps: data.apps || [], version: data.version || '' };
             },
             async save(app) {
                 const base = this.getUrl();
@@ -580,6 +583,7 @@
             const [apiUrl, setApiUrl] = useState(() => CloudApi.getUrl());
             const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error | offline
             const [lastSyncedAt, setLastSyncedAt] = useState(0);
+            const [gasVersionMismatch, setGasVersionMismatch] = useState('');
             const [syncModalOpen, setSyncModalOpen] = useState(false);
             const [savingOverlay, setSavingOverlay] = useState(false);
             const [qrApp, setQrApp] = useState(null);
@@ -800,10 +804,11 @@
                 }
                 setSyncStatus('syncing');
                 try {
-                    const cloudApps = await CloudApi.list();
+                    const { apps: cloudApps, version } = await CloudApi.list();
                     setApps(cloudApps);
                     setSyncStatus('idle');
                     setLastSyncedAt(Date.now());
+                    setGasVersionMismatch(version && version !== EXPECTED_GAS_VERSION ? version : '');
                     if (!silent) showToast('スプレッドシートと同期しました');
                 } catch (err) {
                     console.error(err);
@@ -1269,17 +1274,18 @@
                                     onClick={() => CloudApi.isEnabled() ? syncFromCloud(false) : setSyncModalOpen(true)}
                                     className={`relative p-3 rounded-m3-full transition-colors flex items-center justify-center ${
                                         !CloudApi.isEnabled() ? 'text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHighest' :
-                                        syncStatus === 'error' ? 'text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30' :
+                                        (syncStatus === 'error' || gasVersionMismatch) ? 'text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/30' :
                                         'text-m3-primary hover:bg-m3-surfaceContainerHighest'
                                     }`}
                                     title={
                                         !CloudApi.isEnabled() ? 'スプレッドシート同期を設定' :
+                                        gasVersionMismatch ? 'GASコードが古いままです（クリックで更新手順）' :
                                         pendingQueue.length > 0 ? `${pendingQueue.length}件が同期待ちです（クリックで再試行）` :
                                         syncStatus === 'error' ? '同期エラー（クリックで再試行）' : 'スプレッドシートと今すぐ同期'
                                     }
                                 >
                                     <span className={`material-symbols-rounded ${syncStatus === 'syncing' ? 'animate-spin' : ''}`}>
-                                        {!CloudApi.isEnabled() ? 'cloud_off' : syncStatus === 'error' ? 'cloud_off' : syncStatus === 'syncing' ? 'sync' : 'cloud_done'}
+                                        {!CloudApi.isEnabled() ? 'cloud_off' : gasVersionMismatch ? 'warning' : syncStatus === 'error' ? 'cloud_off' : syncStatus === 'syncing' ? 'sync' : 'cloud_done'}
                                     </span>
                                     {pendingQueue.length > 0 && (
                                         <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
@@ -1412,6 +1418,21 @@
                             </div>
                         </div>
                     </header>
+
+                    {gasVersionMismatch && (
+                        <div className="bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-200 px-4 py-3 flex items-center justify-center gap-3 text-sm flex-wrap">
+                            <span className="material-symbols-rounded text-xl flex-shrink-0">warning</span>
+                            <span className="font-medium">
+                                GASのコードが古いままです（現在: {gasVersionMismatch || '不明'} / 最新: {EXPECTED_GAS_VERSION}）。一部の項目が保存されない原因になります。
+                            </span>
+                            <button
+                                onClick={() => setSyncModalOpen(true)}
+                                className="px-3.5 py-1.5 bg-amber-500 text-white rounded-m3-full text-xs font-bold m3-bounce flex-shrink-0"
+                            >
+                                今すぐ更新手順を見る
+                            </button>
+                        </div>
+                    )}
 
                     <main className="max-w-7xl mx-auto px-4 lg:px-8 pt-6 flex-1 w-full">
                         {/* Row 1: Search / Sort / View / Filter toggle */}
