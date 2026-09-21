@@ -51,7 +51,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.8.0';
+        window.__APP_VERSION__ = '2.9.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -238,7 +238,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        const APP_VERSION = window.__APP_VERSION__ || '2.8.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
+        const APP_VERSION = window.__APP_VERSION__ || '2.9.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
@@ -586,6 +586,7 @@
             const [syncModalOpen, setSyncModalOpen] = useState(false);
             const [savingOverlay, setSavingOverlay] = useState(false);
             const [qrApp, setQrApp] = useState(null);
+            const [detailApp, setDetailApp] = useState(null);
             const [showSplash, setShowSplash] = useState(true);
             const [splashFading, setSplashFading] = useState(false);
             const [statsOpen, setStatsOpen] = useState(false);
@@ -1606,8 +1607,8 @@
                                 {filteredApps.map((app, index) => (
                                     <div
                                         key={app.id}
-                                        onClick={() => { if (selectMode) toggleSelectId(app.id); }}
-                                        className={`m3-card animate-card-in group relative flex flex-col justify-between bg-m3-surfaceContainer rounded-m3-3xl ${CARD_SIZE_CONFIG[cardSize].padding} hover:bg-m3-surfaceContainerHigh hover:shadow-lg transition-all ${selectMode ? 'cursor-pointer' : ''} ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
+                                        onClick={() => { if (selectMode) toggleSelectId(app.id); else setDetailApp(app); }}
+                                        className={`m3-card animate-card-in group relative flex flex-col justify-between bg-m3-surfaceContainer rounded-m3-3xl ${CARD_SIZE_CONFIG[cardSize].padding} hover:bg-m3-surfaceContainerHigh hover:shadow-lg transition-all cursor-pointer ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
                                         style={{
                                             animationDelay: `${Math.min(index * 40, 400)}ms`,
                                             borderLeft: cardColorHex(app.cardColor) ? `5px solid ${cardColorHex(app.cardColor)}` : undefined
@@ -1747,8 +1748,8 @@
                                 {filteredApps.map((app, index) => (
                                     <div
                                         key={app.id}
-                                        onClick={() => { if (selectMode) toggleSelectId(app.id); }}
-                                        className={`m3-card animate-card-in group flex items-center justify-between bg-m3-surfaceContainer rounded-m3-xl p-4 hover:bg-m3-surfaceContainerHigh hover:shadow-md transition-all gap-4 ${selectMode ? 'cursor-pointer' : ''} ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
+                                        onClick={() => { if (selectMode) toggleSelectId(app.id); else setDetailApp(app); }}
+                                        className={`m3-card animate-card-in group flex items-center justify-between bg-m3-surfaceContainer rounded-m3-xl p-4 hover:bg-m3-surfaceContainerHigh hover:shadow-md transition-all gap-4 cursor-pointer ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
                                         style={{
                                             animationDelay: `${Math.min(index * 30, 300)}ms`,
                                             borderLeft: cardColorHex(app.cardColor) ? `5px solid ${cardColorHex(app.cardColor)}` : undefined
@@ -1881,6 +1882,21 @@
 
                     {qrApp && (
                         <QrModal app={qrApp} onClose={() => setQrApp(null)} />
+                    )}
+
+                    {detailApp && (
+                        <AppDetailModal
+                            app={apps.find(a => a.id === detailApp.id) || detailApp}
+                            onClose={() => setDetailApp(null)}
+                            onOpenApp={() => handleOpenApp(detailApp)}
+                            onToggleFavorite={() => handleToggleFavorite(detailApp.id)}
+                            onEdit={() => { setDetailApp(null); openEditModal(detailApp); }}
+                            onShowQr={() => setQrApp(detailApp)}
+                            onShare={() => handleShareApp(detailApp)}
+                            onCopy={() => copyToClipboard(detailApp.url, detailApp.title)}
+                            onToggleMemo={() => toggleMemo(detailApp.id)}
+                            memoExpanded={expandedMemoIds.includes(detailApp.id)}
+                        />
                     )}
 
                     {statsOpen && (
@@ -2112,6 +2128,108 @@ function doPost(e) {
     return jsonOut_({ error: String(err) });
   }
 }`;
+
+        function AppDetailModal({ app, onClose, onOpenApp, onToggleFavorite, onEdit, onShowQr, onShare, onCopy, onToggleMemo, memoExpanded }) {
+            const platform = getPlatform(app);
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
+                    <div
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-md rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh]"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="overflow-y-auto flex-1 p-6">
+                            <div className="flex items-start justify-between mb-5">
+                                <div className="flex items-center gap-4 min-w-0">
+                                    <AppIconDisplay type={app.iconType} imageUrl={app.imageUrl} iconName={app.iconName} iconBgColor={app.iconBgColor} size="lg" />
+                                    <div className="min-w-0">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            {platform === 'gas' && <GasIcon className="w-5 h-5 flex-shrink-0" />}
+                                            {platform === 'github' && <GithubIcon className="w-5 h-5 flex-shrink-0" />}
+                                            <h2 className="text-xl font-extrabold leading-tight break-words">{app.title}</h2>
+                                        </div>
+                                        {app.version && (
+                                            <span className="inline-block mt-1 text-[11px] font-mono font-bold px-2 py-0.5 rounded-m3-s bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant">v{app.version}</span>
+                                        )}
+                                    </div>
+                                </div>
+                                <button onClick={onClose} className="p-1.5 rounded-m3-full hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant flex-shrink-0" title="閉じる">
+                                    <span className="material-symbols-rounded">close</span>
+                                </button>
+                            </div>
+
+                            {splitCategories(app.category).length > 0 && (
+                                <div className="flex items-center gap-1.5 flex-wrap mb-4">
+                                    {splitCategories(app.category).map(tag => (
+                                        <span key={tag} className={`text-xs font-bold px-3 py-1 rounded-m3-s ${categoryColor(tag)}`}>{tag}</span>
+                                    ))}
+                                </div>
+                            )}
+
+                            <p className="text-sm text-m3-onSurfaceVariant leading-relaxed whitespace-pre-wrap mb-5">
+                                {app.description || '（説明文未設定）'}
+                            </p>
+
+                            {app.memo && (
+                                <div className="mb-5">
+                                    <button
+                                        onClick={onToggleMemo}
+                                        className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 rounded-m3-l text-xs font-bold m3-bounce"
+                                    >
+                                        <span className="flex items-center gap-1.5">
+                                            <span className="material-symbols-rounded text-base">edit_note</span>
+                                            内部メモ
+                                        </span>
+                                        <span className="material-symbols-rounded text-base">{memoExpanded ? 'expand_less' : 'expand_more'}</span>
+                                    </button>
+                                    {memoExpanded && (
+                                        <div className="mt-1.5 p-3 rounded-m3-l bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 text-xs whitespace-pre-wrap leading-relaxed">
+                                            {app.memo}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            <button
+                                onClick={onOpenApp}
+                                className="w-full flex items-center justify-center gap-2 px-5 py-4 bg-m3-primary text-m3-onPrimary rounded-m3-full font-bold text-base shadow-md hover:shadow-lg m3-bounce mb-4"
+                            >
+                                <span>アプリを開く</span>
+                                <span className="material-symbols-rounded text-xl">open_in_new</span>
+                            </button>
+
+                            <div className="grid grid-cols-3 gap-2.5">
+                                <button onClick={onToggleFavorite} className="flex flex-col items-center gap-1 py-3 rounded-m3-l bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant m3-bounce">
+                                    <span className={`material-symbols-rounded text-xl ${app.isFavorite ? 'fill text-amber-500' : 'text-m3-onSurfaceVariant'}`}>star</span>
+                                    <span className="text-[11px] font-semibold text-m3-onSurfaceVariant">{app.isFavorite ? 'お気に入り済' : 'お気に入り'}</span>
+                                </button>
+                                <button onClick={onCopy} className="flex flex-col items-center gap-1 py-3 rounded-m3-l bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant m3-bounce">
+                                    <span className="material-symbols-rounded text-xl text-m3-onSurfaceVariant">content_copy</span>
+                                    <span className="text-[11px] font-semibold text-m3-onSurfaceVariant">コピー</span>
+                                </button>
+                                <button onClick={onShowQr} className="flex flex-col items-center gap-1 py-3 rounded-m3-l bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant m3-bounce">
+                                    <span className="material-symbols-rounded text-xl text-m3-onSurfaceVariant">qr_code_2</span>
+                                    <span className="text-[11px] font-semibold text-m3-onSurfaceVariant">QRコード</span>
+                                </button>
+                                <button onClick={onShare} className="flex flex-col items-center gap-1 py-3 rounded-m3-l bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant m3-bounce">
+                                    <span className="material-symbols-rounded text-xl text-m3-onSurfaceVariant">share</span>
+                                    <span className="text-[11px] font-semibold text-m3-onSurfaceVariant">共有</span>
+                                </button>
+                                {app.editUrl && (
+                                    <button onClick={() => window.open(app.editUrl, '_blank', 'noopener,noreferrer')} className="flex flex-col items-center gap-1 py-3 rounded-m3-l bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant m3-bounce">
+                                        <span className="material-symbols-rounded text-xl text-m3-onSurfaceVariant">code</span>
+                                        <span className="text-[11px] font-semibold text-m3-onSurfaceVariant">編集ページ</span>
+                                    </button>
+                                )}
+                                <button onClick={onEdit} className="flex flex-col items-center gap-1 py-3 rounded-m3-l bg-m3-primaryContainer text-m3-onPrimaryContainer hover:bg-m3-primary hover:text-m3-onPrimary m3-bounce">
+                                    <span className="material-symbols-rounded text-xl">edit</span>
+                                    <span className="text-[11px] font-semibold">情報を編集</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
 
         function QrModal({ app, onClose }) {
             const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(app.url)}`;
