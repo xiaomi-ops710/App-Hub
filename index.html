@@ -51,7 +51,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.7.0';
+        window.__APP_VERSION__ = '2.8.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -238,7 +238,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        const APP_VERSION = window.__APP_VERSION__ || '2.7.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
+        const APP_VERSION = window.__APP_VERSION__ || '2.8.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
@@ -574,7 +574,6 @@
             const [cardSize, setCardSize] = useState(() => {
                 try { return localStorage.getItem('m3_app_hub_card_size') || 'md'; } catch (e) { return 'md'; }
             });
-            const [filterPanelOpen, setFilterPanelOpen] = useState(true);
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [editingApp, setEditingApp] = useState(null);
             const [toastMessage, setToastMessage] = useState(null);
@@ -1381,6 +1380,13 @@
                                                     <span className="material-symbols-rounded text-lg">sell</span>
                                                     カテゴリを管理
                                                 </button>
+                                                <button
+                                                    onClick={() => { toggleSelectMode(); setHeaderMenuOpen(false); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                >
+                                                    <span className="material-symbols-rounded text-lg">checklist</span>
+                                                    複数選択して一括操作
+                                                </button>
                                                 <div className="h-px bg-m3-surfaceContainerHighest my-1"></div>
                                                 <button
                                                     onClick={() => { setSyncModalOpen(true); setHeaderMenuOpen(false); }}
@@ -1503,25 +1509,6 @@
                                     </button>
                                 </div>
 
-                                <button
-                                    onClick={toggleSelectMode}
-                                    className={`p-3 rounded-m3-full transition-colors shadow-sm flex items-center justify-center ${selectMode ? 'bg-m3-primary text-m3-onPrimary' : 'bg-m3-surfaceContainerHigh text-m3-onSurfaceVariant'}`}
-                                    title={selectMode ? '選択モードを終了' : '複数選択して一括削除'}
-                                >
-                                    <span className="material-symbols-rounded">checklist</span>
-                                </button>
-
-                                <button
-                                    onClick={() => setFilterPanelOpen(v => !v)}
-                                    className={`relative p-3 rounded-m3-full transition-colors shadow-sm flex items-center justify-center ${filterPanelOpen ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer' : 'bg-m3-surfaceContainerHigh text-m3-onSurfaceVariant'}`}
-                                    title="フィルターの表示切替"
-                                >
-                                    <span className="material-symbols-rounded">tune</span>
-                                    {activeFilterCount > 0 && (
-                                        <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-m3-primary text-m3-onPrimary text-[9px] font-bold flex items-center justify-center">{activeFilterCount}</span>
-                                    )}
-                                </button>
-
                                 <div className="inline-flex rounded-m3-full bg-m3-surfaceContainerHigh p-1 shadow-sm">
                                     <button
                                         onClick={() => setViewMode('grid')}
@@ -1542,50 +1529,48 @@
                         </div>
 
                         {/* Row 2: Collapsible filter panel */}
-                        {filterPanelOpen && (
-                            <div className="bg-m3-surfaceContainerLow rounded-m3-xl p-3 mb-5 animate-slide-up">
-                                <div className="flex items-center justify-between mb-2.5">
-                                    <button
-                                        onClick={() => setFavoritesOnly(v => !v)}
-                                        className={`px-4 py-2 rounded-m3-full text-xs md:text-sm font-medium transition-all flex items-center gap-1.5 shadow-sm ${favoritesOnly ? 'bg-amber-400 text-white' : 'bg-m3-surfaceContainerHigh text-m3-onSurfaceVariant hover:text-amber-500'}`}
-                                    >
-                                        <span className={`material-symbols-rounded text-base ${favoritesOnly ? 'fill' : ''}`}>star</span>
-                                        <span>お気に入りのみ</span>
+                        <div className="bg-m3-surfaceContainerLow rounded-m3-xl p-3 mb-5">
+                            <div className="flex items-center justify-between mb-2.5">
+                                <button
+                                    onClick={() => setFavoritesOnly(v => !v)}
+                                    className={`px-4 py-2 rounded-m3-full text-xs md:text-sm font-medium flex items-center gap-1.5 shadow-sm m3-bounce ${favoritesOnly ? 'bg-amber-400 text-white' : 'bg-m3-surfaceContainerHigh text-m3-onSurfaceVariant hover:text-amber-500'}`}
+                                >
+                                    <span className={`material-symbols-rounded text-base ${favoritesOnly ? 'fill' : ''}`}>star</span>
+                                    <span>お気に入りのみ</span>
+                                </button>
+
+                                {activeFilterCount > 0 && (
+                                    <button onClick={clearFilters} className="text-xs font-medium text-m3-primary hover:underline flex items-center gap-1 flex-shrink-0 ml-2">
+                                        <span className="material-symbols-rounded text-sm">filter_alt_off</span>
+                                        <span className="hidden sm:inline">フィルター解除</span>
                                     </button>
-
-                                    {activeFilterCount > 0 && (
-                                        <button onClick={clearFilters} className="text-xs font-medium text-m3-primary hover:underline flex items-center gap-1 flex-shrink-0 ml-2">
-                                            <span className="material-symbols-rounded text-sm">filter_alt_off</span>
-                                            <span className="hidden sm:inline">フィルター解除</span>
-                                        </button>
-                                    )}
-                                </div>
-
-                                <div className="flex items-center gap-2 overflow-x-auto pb-0.5 scrollbar-none">
-                                    {categories.map((cat) => (
-                                        <button
-                                            key={cat}
-                                            onClick={() => {
-                                                if (cat === 'ALL') { setSelectedCategories([]); return; }
-                                                // タップしたカテゴリだけを選択（前のカテゴリは自動的に外れる）。
-                                                // 同じものをもう一度押すと選択解除。
-                                                setSelectedCategories(prev => (prev.length === 1 && prev[0] === cat) ? [] : [cat]);
-                                            }}
-                                            className={`px-4 py-2 rounded-m3-l text-xs md:text-sm font-medium whitespace-nowrap transition-all ${
-                                                (cat === 'ALL' ? selectedCategories.length === 0 : selectedCategories.includes(cat))
-                                                    ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm font-bold'
-                                                    : 'bg-m3-surfaceContainer text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHigh'
-                                            }`}
-                                        >
-                                            {cat === 'ALL' ? 'すべてのカテゴリ' : cat}
-                                        </button>
-                                    ))}
-                                </div>
-                                {selectedCategories.length > 0 && (
-                                    <p className="text-[11px] text-m3-onSurfaceVariant/70 mt-2">もう一度押すと選択を解除します</p>
                                 )}
                             </div>
-                        )}
+
+                            <div className="flex items-center gap-2 overflow-x-auto pb-0.5 scrollbar-none">
+                                {categories.map((cat) => (
+                                    <button
+                                        key={cat}
+                                        onClick={() => {
+                                            if (cat === 'ALL') { setSelectedCategories([]); return; }
+                                            // タップしたカテゴリだけを選択（前のカテゴリは自動的に外れる）。
+                                            // 同じものをもう一度押すと選択解除。
+                                            setSelectedCategories(prev => (prev.length === 1 && prev[0] === cat) ? [] : [cat]);
+                                        }}
+                                        className={`px-4 py-2 rounded-m3-l text-xs md:text-sm font-medium whitespace-nowrap m3-bounce ${
+                                            (cat === 'ALL' ? selectedCategories.length === 0 : selectedCategories.includes(cat))
+                                                ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm font-bold'
+                                                : 'bg-m3-surfaceContainer text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHigh'
+                                        }`}
+                                    >
+                                        {cat === 'ALL' ? 'すべてのカテゴリ' : cat}
+                                    </button>
+                                ))}
+                            </div>
+                            {selectedCategories.length > 0 && (
+                                <p className="text-[11px] text-m3-onSurfaceVariant/70 mt-2">もう一度押すと選択を解除します</p>
+                            )}
+                        </div>
 
                         <div className="flex items-center justify-between mb-3 px-1">
                             <p className="text-xs text-m3-onSurfaceVariant">{filteredApps.length}件のアプリを表示中{apps.length !== filteredApps.length ? `（全${apps.length}件中）` : ''}</p>
@@ -1621,8 +1606,8 @@
                                 {filteredApps.map((app, index) => (
                                     <div
                                         key={app.id}
-                                        onClick={() => selectMode ? toggleSelectId(app.id) : handleOpenApp(app)}
-                                        className={`m3-card animate-card-in group relative flex flex-col justify-between bg-m3-surfaceContainer rounded-m3-3xl ${CARD_SIZE_CONFIG[cardSize].padding} cursor-pointer hover:bg-m3-surfaceContainerHigh hover:shadow-lg transition-all ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
+                                        onClick={() => { if (selectMode) toggleSelectId(app.id); }}
+                                        className={`m3-card animate-card-in group relative flex flex-col justify-between bg-m3-surfaceContainer rounded-m3-3xl ${CARD_SIZE_CONFIG[cardSize].padding} hover:bg-m3-surfaceContainerHigh hover:shadow-lg transition-all ${selectMode ? 'cursor-pointer' : ''} ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
                                         style={{
                                             animationDelay: `${Math.min(index * 40, 400)}ms`,
                                             borderLeft: cardColorHex(app.cardColor) ? `5px solid ${cardColorHex(app.cardColor)}` : undefined
@@ -1762,8 +1747,8 @@
                                 {filteredApps.map((app, index) => (
                                     <div
                                         key={app.id}
-                                        onClick={() => selectMode ? toggleSelectId(app.id) : handleOpenApp(app)}
-                                        className={`m3-card animate-card-in group flex items-center justify-between bg-m3-surfaceContainer rounded-m3-xl p-4 cursor-pointer hover:bg-m3-surfaceContainerHigh hover:shadow-md transition-all gap-4 ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
+                                        onClick={() => { if (selectMode) toggleSelectId(app.id); }}
+                                        className={`m3-card animate-card-in group flex items-center justify-between bg-m3-surfaceContainer rounded-m3-xl p-4 hover:bg-m3-surfaceContainerHigh hover:shadow-md transition-all gap-4 ${selectMode ? 'cursor-pointer' : ''} ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
                                         style={{
                                             animationDelay: `${Math.min(index * 30, 300)}ms`,
                                             borderLeft: cardColorHex(app.cardColor) ? `5px solid ${cardColorHex(app.cardColor)}` : undefined
@@ -1837,11 +1822,19 @@
                                             </button>
                                             <button
                                                 onClick={(e) => openEditModal(app, e)}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-m3-primaryContainer text-m3-onPrimaryContainer hover:bg-m3-primary hover:text-m3-onPrimary rounded-m3-full text-xs font-semibold transition-all shadow-sm"
+                                                className="flex items-center gap-1 px-3 py-1.5 bg-m3-surfaceContainerHighest hover:bg-m3-surfaceVariant text-m3-onSurfaceVariant hover:text-m3-onSurface rounded-m3-full text-xs font-semibold m3-bounce"
                                                 title="編集"
                                             >
                                                 <span className="material-symbols-rounded text-base">edit</span>
                                                 <span className="hidden sm:inline">編集</span>
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleOpenApp(app); }}
+                                                className="flex items-center gap-1 px-3.5 py-1.5 bg-m3-primaryContainer text-m3-onPrimaryContainer hover:bg-m3-primary hover:text-m3-onPrimary rounded-m3-full text-xs font-bold m3-bounce"
+                                                title="開く"
+                                            >
+                                                <span className="hidden sm:inline">開く</span>
+                                                <span className="material-symbols-rounded text-base">open_in_new</span>
                                             </button>
                                         </div>
                                     </div>
