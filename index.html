@@ -51,7 +51,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.9.0';
+        window.__APP_VERSION__ = '2.10.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -238,7 +238,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        const APP_VERSION = window.__APP_VERSION__ || '2.9.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
+        const APP_VERSION = window.__APP_VERSION__ || '2.10.0'; // アプリ自体のバージョン（起動画面に表示。head内のスクリプトと共通）
         const STORAGE_KEY = 'm3_app_hub_items_v2';
         const THEME_KEY = 'm3_app_hub_theme';
         const API_URL_KEY = 'm3_app_hub_api_url';
@@ -1894,8 +1894,6 @@
                             onShowQr={() => setQrApp(detailApp)}
                             onShare={() => handleShareApp(detailApp)}
                             onCopy={() => copyToClipboard(detailApp.url, detailApp.title)}
-                            onToggleMemo={() => toggleMemo(detailApp.id)}
-                            memoExpanded={expandedMemoIds.includes(detailApp.id)}
                         />
                     )}
 
@@ -2129,7 +2127,7 @@ function doPost(e) {
   }
 }`;
 
-        function AppDetailModal({ app, onClose, onOpenApp, onToggleFavorite, onEdit, onShowQr, onShare, onCopy, onToggleMemo, memoExpanded }) {
+        function AppDetailModal({ app, onClose, onOpenApp, onToggleFavorite, onEdit, onShowQr, onShare, onCopy }) {
             const platform = getPlatform(app);
             return (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
@@ -2171,23 +2169,30 @@ function doPost(e) {
 
                             {app.memo && (
                                 <div className="mb-5">
-                                    <button
-                                        onClick={onToggleMemo}
-                                        className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 rounded-m3-l text-xs font-bold m3-bounce"
-                                    >
-                                        <span className="flex items-center gap-1.5">
-                                            <span className="material-symbols-rounded text-base">edit_note</span>
-                                            内部メモ
-                                        </span>
-                                        <span className="material-symbols-rounded text-base">{memoExpanded ? 'expand_less' : 'expand_more'}</span>
-                                    </button>
-                                    {memoExpanded && (
-                                        <div className="mt-1.5 p-3 rounded-m3-l bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 text-xs whitespace-pre-wrap leading-relaxed">
-                                            {app.memo}
-                                        </div>
-                                    )}
+                                    <p className="flex items-center gap-1.5 text-xs font-bold text-amber-700 dark:text-amber-400 mb-1.5">
+                                        <span className="material-symbols-rounded text-base">edit_note</span>
+                                        内部メモ
+                                    </p>
+                                    <div className="p-3 rounded-m3-l bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 text-xs whitespace-pre-wrap leading-relaxed">
+                                        {app.memo}
+                                    </div>
                                 </div>
                             )}
+
+                            <div className="grid grid-cols-3 gap-2.5 mb-5 text-center">
+                                <div className="bg-m3-surfaceContainerHighest rounded-m3-l py-2.5">
+                                    <p className="text-sm font-extrabold text-m3-primary">{app.openCount || 0}</p>
+                                    <p className="text-[10px] text-m3-onSurfaceVariant mt-0.5">起動回数</p>
+                                </div>
+                                <div className="bg-m3-surfaceContainerHighest rounded-m3-l py-2.5">
+                                    <p className="text-sm font-extrabold text-m3-onSurface">{formatRelative(app.lastOpenedAt)}</p>
+                                    <p className="text-[10px] text-m3-onSurfaceVariant mt-0.5">最終利用</p>
+                                </div>
+                                <div className="bg-m3-surfaceContainerHighest rounded-m3-l py-2.5">
+                                    <p className="text-sm font-extrabold text-m3-onSurface">{formatDate(app.createdAt)}</p>
+                                    <p className="text-[10px] text-m3-onSurfaceVariant mt-0.5">登録日</p>
+                                </div>
+                            </div>
 
                             <button
                                 onClick={onOpenApp}
@@ -2234,7 +2239,7 @@ function doPost(e) {
         function QrModal({ app, onClose }) {
             const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(app.url)}`;
             return (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
                     <div
                         className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-xs rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col items-center p-6 animate-slide-up"
                         onClick={(e) => e.stopPropagation()}
