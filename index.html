@@ -51,7 +51,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.11.0';
+        window.__APP_VERSION__ = '2.14.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -187,6 +187,20 @@
             transform: scale(0.9);
         }
 
+        /* Material 3 Expressive: ポップアップ（モーダル・メニュー）がバネで弾みながら現れる動き */
+        @keyframes m3ePop {
+            0% { opacity: 0; transform: scale(0.86) translateY(10px); }
+            60% { opacity: 1; transform: scale(1.015) translateY(0); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .animate-m3e-pop { animation: m3ePop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1); transform-origin: center; }
+        @keyframes m3eMenuPop {
+            0% { opacity: 0; transform: scale(0.85) translateY(-6px); }
+            60% { opacity: 1; transform: scale(1.02) translateY(0); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .animate-m3e-menu-pop { animation: m3eMenuPop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1); transform-origin: top right; }
+
         @keyframes float {
             0%, 100% { transform: translateY(0); }
             50% { transform: translateY(-8px); }
@@ -245,7 +259,7 @@
         const PENDING_QUEUE_KEY = 'm3_app_hub_pending_queue';
         // GASコードのバージョン。GAS_CODE_SNIPPET内のCODE_VERSIONと必ず同じ値に保つこと。
         // 一致しない場合、古いGASコードのまま（新しい項目が保存されない等の原因）と判断して警告を出す。
-        const EXPECTED_GAS_VERSION = 'v13-robust-header-match-2026-09';
+        const EXPECTED_GAS_VERSION = 'v14-selfheal-testrows-2026-09';
         const genOpId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         // --- GAS(Firebase連携)APIクライアント ---
@@ -270,7 +284,11 @@
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
-                return { apps: data.apps || [], version: data.version || '' };
+                // 接続テストが作るテスト用の行は本来GAS側(list)で除外されるが、
+                // 古いバージョンのGASコードがまだデプロイされている場合の保険として、
+                // クライアント側でも念のため除外しておく（v14）。
+                const apps = (data.apps || []).filter(a => !(a && String(a.id).indexOf('__connection_test__') === 0));
+                return { apps, version: data.version || '' };
             },
             async save(app) {
                 const base = this.getUrl();
@@ -568,7 +586,6 @@
             const [searchQuery, setSearchQuery] = useState('');
             const [selectedCategories, setSelectedCategories] = useState([]);
             const [selectedIconFilter, setSelectedIconFilter] = useState('ALL');
-            const [favoritesOnly, setFavoritesOnly] = useState(false);
             const [sortBy, setSortBy] = useState('smart');
             const [viewMode, setViewMode] = useState('grid');
             const [cardSize, setCardSize] = useState(() => {
@@ -581,6 +598,7 @@
             const importInputRef = useRef(null);
             const [apiUrl, setApiUrl] = useState(() => CloudApi.getUrl());
             const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error | offline
+            const [isOnline, setIsOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
             const [lastSyncedAt, setLastSyncedAt] = useState(0);
             const [gasVersionMismatch, setGasVersionMismatch] = useState('');
             const [syncModalOpen, setSyncModalOpen] = useState(false);
@@ -655,9 +673,22 @@
                 setPendingQueue(next);
             };
 
-            const flushQueue = async () => {
+            const backoffRef = useRef({ delayMs: 20000, nextAttemptAt: 0 });
+
+            const flushQueue = async (opts) => {
+                const force = opts && opts.force;
                 if (!CloudApi.isEnabled()) return;
+                // オフライン中は失敗するとわかっているリクエストを送らない
+                // （'online'イベント発火時に自動で再試行される）。
+                if (!force && typeof navigator !== 'undefined' && navigator.onLine === false) {
+                    setSyncStatus('offline');
+                    return;
+                }
                 if (isFlushingRef.current) return;
+                // 失敗が続いている間は、バックオフ期間が過ぎるまで自動リトライを控える
+                // （GAS側が落ちている時などに無駄なリクエストを連発しないため）。
+                // ユーザーが明示的に同期ボタン等を押した場合（force）は待たずに試す。
+                if (!force && Date.now() < backoffRef.current.nextAttemptAt) return;
                 isFlushingRef.current = true;
                 if (pendingQueueRef.current.length > 0) setSyncStatus('syncing');
                 const queue = [...pendingQueueRef.current];
@@ -677,6 +708,12 @@
                 }
                 isFlushingRef.current = false;
                 setSyncStatus(hadError ? 'error' : 'idle');
+                if (hadError) {
+                    backoffRef.current.delayMs = Math.min(backoffRef.current.delayMs * 2, 5 * 60000);
+                } else {
+                    backoffRef.current.delayMs = 20000;
+                }
+                backoffRef.current.nextAttemptAt = Date.now() + backoffRef.current.delayMs;
             };
 
             const [splashSyncing, setSplashSyncing] = useState(false);
@@ -764,12 +801,6 @@
                             setEditingApp(null);
                             setIsModalOpen(true);
                         }
-                    } else if ((e.key === 'f' || e.key === 'F') && !isModalOpen) {
-                        const tag = document.activeElement?.tagName;
-                        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
-                            e.preventDefault();
-                            setFavoritesOnly(v => !v);
-                        }
                     } else if ((e.key === 'v' || e.key === 'V') && !isModalOpen) {
                         const tag = document.activeElement?.tagName;
                         if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
@@ -793,10 +824,15 @@
 
             const syncFromCloud = async (silent) => {
                 if (!CloudApi.isEnabled()) return;
+                if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                    setSyncStatus('offline');
+                    if (!silent) showToast('オフラインです。接続が戻ってから同期してください');
+                    return;
+                }
                 // 未送信の変更が残っている場合は、それを送り切ってから取得する
                 // （先に取得してしまうと、未送信のお気に入り・追加などが上書きで消えてしまうため）
                 if (pendingQueueRef.current.length > 0) {
-                    await flushQueue();
+                    await flushQueue({ force: true });
                     if (pendingQueueRef.current.length > 0) {
                         if (!silent) showToast('未送信の変更があるため送信を再試行しています…（自動的に続行されます）', 4000);
                         return;
@@ -822,21 +858,38 @@
                 if (!CloudApi.isEnabled()) return;
                 if (!window.confirm(`ローカルの${apps.length}件を全てスプレッドシートに再送信します。スプレッドシート側の内容はこの内容で上書きされます。よろしいですか？`)) return;
                 apps.forEach(a => enqueueSync({ opId: genOpId(), type: 'save', payload: a }));
-                flushQueue();
+                flushQueue({ force: true });
                 showToast(`${apps.length}件の再送信を開始しました`);
             };
 
             // 起動時の同期は起動アニメーション側のuseEffectで実行済み（重複呼び出し防止のためここでは行わない）
 
-            // 定期的に未送信キューの再送を試みる（通信が一時的に切れていた場合の自動リカバリ）
+            // 定期的に未送信キューの再送を試みる（通信が一時的に切れていた場合の自動リカバリ）。
+            // オンライン/オフラインの実際の状態も追跡し、オフライン中は無駄なリクエストを送らず、
+            // 回線が戻った瞬間にバックオフをリセットして即座に再送する。
             useEffect(() => {
-                if (!CloudApi.isEnabled()) return;
+                const handleOnline = () => {
+                    setIsOnline(true);
+                    backoffRef.current = { delayMs: 20000, nextAttemptAt: 0 };
+                    if (CloudApi.isEnabled()) flushQueue({ force: true });
+                };
+                const handleOffline = () => {
+                    setIsOnline(false);
+                    setSyncStatus('offline');
+                };
+                window.addEventListener('online', handleOnline);
+                window.addEventListener('offline', handleOffline);
+                if (!CloudApi.isEnabled()) {
+                    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
+                }
                 const interval = setInterval(() => {
                     if (pendingQueueRef.current.length > 0) flushQueue();
                 }, 20000);
-                const handleOnline = () => flushQueue();
-                window.addEventListener('online', handleOnline);
-                return () => { clearInterval(interval); window.removeEventListener('online', handleOnline); };
+                return () => {
+                    clearInterval(interval);
+                    window.removeEventListener('online', handleOnline);
+                    window.removeEventListener('offline', handleOffline);
+                };
             }, []);
 
             const handleSaveApiUrl = (url) => {
@@ -864,6 +917,9 @@
                         app.title.toLowerCase().includes(q) ||
                         (app.description || '').toLowerCase().includes(q) ||
                         (app.category || '').toLowerCase().includes(q) ||
+                        (app.memo || '').toLowerCase().includes(q) ||
+                        (app.version || '').toLowerCase().includes(q) ||
+                        (app.editUrl || '').toLowerCase().includes(q) ||
                         app.url.toLowerCase().includes(q);
 
                     const matchesCategory = selectedCategories.length === 0 ||
@@ -873,9 +929,7 @@
                         (selectedIconFilter === 'gas' && getPlatform(app) === 'gas') ||
                         (selectedIconFilter === 'github' && getPlatform(app) === 'github');
 
-                    const matchesFavorite = !favoritesOnly || app.isFavorite;
-
-                    return matchesSearch && matchesCategory && matchesIcon && matchesFavorite;
+                    return matchesSearch && matchesCategory && matchesIcon;
                 });
 
                 switch (sortBy) {
@@ -898,14 +952,13 @@
                         list.sort((a, b) => (b.isFavorite ? 1 : 0) - (a.isFavorite ? 1 : 0) || b.createdAt - a.createdAt);
                 }
                 return list;
-            }, [apps, searchQuery, selectedCategories, selectedIconFilter, favoritesOnly, sortBy]);
+            }, [apps, searchQuery, selectedCategories, selectedIconFilter, sortBy]);
 
-            const activeFilterCount = (selectedCategories.length > 0 ? 1 : 0) + (selectedIconFilter !== 'ALL' ? 1 : 0) + (favoritesOnly ? 1 : 0);
+            const activeFilterCount = (selectedCategories.length > 0 ? 1 : 0) + (selectedIconFilter !== 'ALL' ? 1 : 0);
 
             const clearFilters = () => {
                 setSelectedCategories([]);
                 setSelectedIconFilter('ALL');
-                setFavoritesOnly(false);
             };
 
             const handleToggleFavorite = (id, e) => {
@@ -920,7 +973,7 @@
                 setApps(prev => prev.map(a => a.id === id ? updated : a));
                 if (CloudApi.isEnabled()) {
                     enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
-                    flushQueue();
+                    flushQueue({ force: true });
                 }
             };
 
@@ -933,7 +986,7 @@
                 setApps(prev => prev.map(a => a.id === appId ? updated : a));
                 if (CloudApi.isEnabled()) {
                     enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
-                    flushQueue();
+                    flushQueue({ force: true });
                 }
             };
 
@@ -945,7 +998,7 @@
                 setApps(prev => prev.map(a => a.id === app.id ? updated : a));
                 if (CloudApi.isEnabled()) {
                     enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
-                    flushQueue();
+                    flushQueue({ force: true });
                 }
             };
 
@@ -962,7 +1015,7 @@
                 const timeoutId = setTimeout(() => {
                     if (CloudApi.isEnabled()) {
                         enqueueSync({ opId: genOpId(), type: 'delete', payload: { id } });
-                        flushQueue();
+                        flushQueue({ force: true });
                     }
                     pendingDeleteRef.current = null;
                     setUndoToast(null);
@@ -984,7 +1037,7 @@
                 const timeoutId = setTimeout(() => {
                     if (CloudApi.isEnabled()) {
                         idsSnapshot.forEach(id => enqueueSync({ opId: genOpId(), type: 'delete', payload: { id } }));
-                        flushQueue();
+                        flushQueue({ force: true });
                     }
                     pendingDeleteRef.current = null;
                     setUndoToast(null);
@@ -1003,7 +1056,7 @@
                 setApps(prev => prev.map(a => idsSnapshot.includes(a.id) ? { ...a, category: trimmed, updatedAt: Date.now() } : a));
                 if (CloudApi.isEnabled()) {
                     updatedApps.forEach(a => enqueueSync({ opId: genOpId(), type: 'save', payload: a }));
-                    flushQueue();
+                    flushQueue({ force: true });
                 }
                 setSelectMode(false);
                 setSelectedIds([]);
@@ -1027,7 +1080,7 @@
                 }));
                 if (CloudApi.isEnabled()) {
                     updatedApps.forEach(a => enqueueSync({ opId: genOpId(), type: 'save', payload: a }));
-                    flushQueue();
+                    flushQueue({ force: true });
                 }
                 showToast(`「${oldName}」を「${newName}」に変更しました（${affected.length}件）`);
             };
@@ -1048,7 +1101,7 @@
                 }));
                 if (CloudApi.isEnabled()) {
                     updatedApps.forEach(a => enqueueSync({ opId: genOpId(), type: 'save', payload: a }));
-                    flushQueue();
+                    flushQueue({ force: true });
                 }
                 if (selectedCategories.includes(name)) setSelectedCategories(prev => prev.filter(c => c !== name));
                 showToast(`「${name}」を削除しました`);
@@ -1100,7 +1153,7 @@
                 //    それ以上かかる/失敗しても、データはキューに残っているため失われない。
                 setSavingOverlay(true);
                 await Promise.race([
-                    flushQueue(),
+                    flushQueue({ force: true }),
                     new Promise((resolve) => setTimeout(resolve, 8000))
                 ]);
                 setSavingOverlay(false);
@@ -1271,21 +1324,23 @@
                                     </button>
                                 )}
                                 <button
-                                    onClick={() => CloudApi.isEnabled() ? syncFromCloud(false) : setSyncModalOpen(true)}
-                                    className={`relative p-3 rounded-m3-full transition-colors flex items-center justify-center ${
+                                    onClick={() => { if (!isOnline) return; CloudApi.isEnabled() ? syncFromCloud(false) : setSyncModalOpen(true); }}
+                                    className={`relative p-3 rounded-m3-full flex items-center justify-center m3-bounce ${
                                         !CloudApi.isEnabled() ? 'text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHighest' :
+                                        !isOnline ? 'text-m3-onSurfaceVariant' :
                                         (syncStatus === 'error' || gasVersionMismatch) ? 'text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/30' :
                                         'text-m3-primary hover:bg-m3-surfaceContainerHighest'
                                     }`}
                                     title={
                                         !CloudApi.isEnabled() ? 'スプレッドシート同期を設定' :
+                                        !isOnline ? 'オフラインです（接続が戻ると自動的に再送されます）' :
                                         gasVersionMismatch ? 'GASコードが古いままです（クリックで更新手順）' :
                                         pendingQueue.length > 0 ? `${pendingQueue.length}件が同期待ちです（クリックで再試行）` :
                                         syncStatus === 'error' ? '同期エラー（クリックで再試行）' : 'スプレッドシートと今すぐ同期'
                                     }
                                 >
                                     <span className={`material-symbols-rounded ${syncStatus === 'syncing' ? 'animate-spin' : ''}`}>
-                                        {!CloudApi.isEnabled() ? 'cloud_off' : gasVersionMismatch ? 'warning' : syncStatus === 'error' ? 'cloud_off' : syncStatus === 'syncing' ? 'sync' : 'cloud_done'}
+                                        {!CloudApi.isEnabled() ? 'cloud_off' : !isOnline ? 'wifi_off' : gasVersionMismatch ? 'warning' : syncStatus === 'error' ? 'cloud_off' : syncStatus === 'syncing' ? 'sync' : 'cloud_done'}
                                     </span>
                                     {pendingQueue.length > 0 && (
                                         <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
@@ -1312,17 +1367,21 @@
                                     {headerMenuOpen && (
                                         <>
                                             <div className="fixed inset-0 z-30" onClick={() => setHeaderMenuOpen(false)}></div>
-                                            <div className="absolute right-0 top-full mt-2 z-40 w-64 bg-m3-surfaceContainerHigh rounded-m3-l shadow-2xl overflow-hidden animate-slide-up py-1.5">
+                                            <div className="absolute right-0 top-full mt-2 z-40 w-72 bg-m3-surfaceContainerHigh rounded-m3-2xl shadow-2xl overflow-hidden animate-m3e-menu-pop p-2">
                                                 <button
                                                     onClick={() => { setThemeMode(prev => prev === 'light' ? 'dark' : prev === 'dark' ? 'system' : 'light'); setHeaderMenuOpen(false); }}
-                                                    className="sm:hidden w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="sm:hidden w-full flex items-center gap-3 px-3 py-2.5 rounded-m3-l text-sm font-medium text-m3-onSurface hover:bg-m3-primaryContainer/40 m3-bounce"
                                                 >
-                                                    <span className="material-symbols-rounded text-lg">{themeMode === 'light' ? 'light_mode' : themeMode === 'dark' ? 'dark_mode' : 'brightness_auto'}</span>
+                                                    <span className="w-9 h-9 rounded-m3-l bg-m3-primaryContainer text-m3-onPrimaryContainer flex items-center justify-center flex-shrink-0">
+                                                        <span className="material-symbols-rounded text-lg">{themeMode === 'light' ? 'light_mode' : themeMode === 'dark' ? 'dark_mode' : 'brightness_auto'}</span>
+                                                    </span>
                                                     表示テーマ切替
                                                 </button>
-                                                <div className="flex items-center justify-between gap-2 px-4 py-2.5">
-                                                    <span className="flex items-center gap-3 text-sm text-m3-onSurface">
-                                                        <span className="material-symbols-rounded text-lg">photo_size_select_large</span>
+                                                <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                                                    <span className="flex items-center gap-3 text-sm font-medium text-m3-onSurface">
+                                                        <span className="w-9 h-9 rounded-m3-l bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant flex items-center justify-center flex-shrink-0">
+                                                            <span className="material-symbols-rounded text-lg">photo_size_select_large</span>
+                                                        </span>
                                                         カードサイズ
                                                     </span>
                                                     <div className="inline-flex rounded-m3-full bg-m3-surfaceContainerHighest p-0.5">
@@ -1330,7 +1389,7 @@
                                                             <button
                                                                 key={size}
                                                                 onClick={() => setCardSize(size)}
-                                                                className={`px-2.5 py-1 rounded-m3-full text-[11px] font-bold transition-all ${cardSize === size ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
+                                                                className={`px-2.5 py-1 rounded-m3-full text-[11px] font-bold m3-bounce ${cardSize === size ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
                                                                 title={label}
                                                             >
                                                                 {label}
@@ -1338,12 +1397,14 @@
                                                         ))}
                                                     </div>
                                                 </div>
-                                                <div className="px-4 py-2.5">
-                                                    <span className="flex items-center gap-3 text-sm text-m3-onSurface mb-2">
-                                                        <span className="material-symbols-rounded text-lg">palette</span>
+                                                <div className="px-3 py-2.5">
+                                                    <span className="flex items-center gap-3 text-sm font-medium text-m3-onSurface mb-2">
+                                                        <span className="w-9 h-9 rounded-m3-l bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant flex items-center justify-center flex-shrink-0">
+                                                            <span className="material-symbols-rounded text-lg">palette</span>
+                                                        </span>
                                                         テーマカラー
                                                     </span>
-                                                    <div className="flex items-center gap-2 flex-wrap pl-8">
+                                                    <div className="flex items-center gap-2 flex-wrap pl-12">
                                                         {Object.entries(ACCENT_THEMES).map(([key, theme]) => (
                                                             <button
                                                                 key={key}
@@ -1357,57 +1418,71 @@
                                                         ))}
                                                     </div>
                                                 </div>
-                                                <div className="h-px bg-m3-surfaceContainerHighest my-1"></div>
+                                                <div className="h-px bg-m3-surfaceContainerHighest mx-2 my-1.5"></div>
                                                 {installPromptEvent && !isInstalled && (
                                                     <button
                                                         onClick={() => { handleInstallClick(); setHeaderMenuOpen(false); }}
-                                                        className="lg:hidden w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                        className="lg:hidden w-full flex items-center gap-3 px-3 py-2.5 rounded-m3-l text-sm font-medium text-m3-onSurface hover:bg-m3-primaryContainer/40 m3-bounce"
                                                     >
-                                                        <span className="material-symbols-rounded text-lg">install_mobile</span>
+                                                        <span className="w-9 h-9 rounded-m3-l bg-m3-primaryContainer text-m3-onPrimaryContainer flex items-center justify-center flex-shrink-0">
+                                                            <span className="material-symbols-rounded text-lg">install_mobile</span>
+                                                        </span>
                                                         アプリとしてインストール
                                                     </button>
                                                 )}
                                                 <button
                                                     onClick={() => { setStatsOpen(true); setHeaderMenuOpen(false); }}
-                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-m3-l text-sm font-medium text-m3-onSurface hover:bg-m3-primaryContainer/40 m3-bounce"
                                                 >
-                                                    <span className="material-symbols-rounded text-lg">monitoring</span>
+                                                    <span className="w-9 h-9 rounded-m3-l bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant flex items-center justify-center flex-shrink-0">
+                                                        <span className="material-symbols-rounded text-lg">monitoring</span>
+                                                    </span>
                                                     統計を見る
                                                 </button>
                                                 <button
                                                     onClick={() => { setCategoryManagerOpen(true); setHeaderMenuOpen(false); }}
-                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-m3-l text-sm font-medium text-m3-onSurface hover:bg-m3-primaryContainer/40 m3-bounce"
                                                 >
-                                                    <span className="material-symbols-rounded text-lg">sell</span>
+                                                    <span className="w-9 h-9 rounded-m3-l bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant flex items-center justify-center flex-shrink-0">
+                                                        <span className="material-symbols-rounded text-lg">sell</span>
+                                                    </span>
                                                     カテゴリを管理
                                                 </button>
                                                 <button
                                                     onClick={() => { toggleSelectMode(); setHeaderMenuOpen(false); }}
-                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-m3-l text-sm font-medium text-m3-onSurface hover:bg-m3-primaryContainer/40 m3-bounce"
                                                 >
-                                                    <span className="material-symbols-rounded text-lg">checklist</span>
+                                                    <span className="w-9 h-9 rounded-m3-l bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant flex items-center justify-center flex-shrink-0">
+                                                        <span className="material-symbols-rounded text-lg">checklist</span>
+                                                    </span>
                                                     複数選択して一括操作
                                                 </button>
-                                                <div className="h-px bg-m3-surfaceContainerHighest my-1"></div>
+                                                <div className="h-px bg-m3-surfaceContainerHighest mx-2 my-1.5"></div>
                                                 <button
                                                     onClick={() => { setSyncModalOpen(true); setHeaderMenuOpen(false); }}
-                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-m3-l text-sm font-medium text-m3-onSurface hover:bg-m3-primaryContainer/40 m3-bounce"
                                                 >
-                                                    <span className="material-symbols-rounded text-lg">settings</span>
+                                                    <span className="w-9 h-9 rounded-m3-l bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant flex items-center justify-center flex-shrink-0">
+                                                        <span className="material-symbols-rounded text-lg">settings</span>
+                                                    </span>
                                                     スプレッドシート同期設定
                                                 </button>
                                                 <button
                                                     onClick={() => { handleImportClick(); setHeaderMenuOpen(false); }}
-                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-m3-l text-sm font-medium text-m3-onSurface hover:bg-m3-primaryContainer/40 m3-bounce"
                                                 >
-                                                    <span className="material-symbols-rounded text-lg">upload</span>
+                                                    <span className="w-9 h-9 rounded-m3-l bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant flex items-center justify-center flex-shrink-0">
+                                                        <span className="material-symbols-rounded text-lg">upload</span>
+                                                    </span>
                                                     バックアップから復元
                                                 </button>
                                                 <button
                                                     onClick={() => { handleExport(); setHeaderMenuOpen(false); }}
-                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-m3-onSurface hover:bg-m3-surfaceContainerHighest transition-colors"
+                                                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-m3-l text-sm font-medium text-m3-onSurface hover:bg-m3-primaryContainer/40 m3-bounce"
                                                 >
-                                                    <span className="material-symbols-rounded text-lg">download</span>
+                                                    <span className="w-9 h-9 rounded-m3-l bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant flex items-center justify-center flex-shrink-0">
+                                                        <span className="material-symbols-rounded text-lg">download</span>
+                                                    </span>
                                                     バックアップをダウンロード
                                                 </button>
                                             </div>
@@ -1444,9 +1519,11 @@
                     <main className="max-w-7xl mx-auto px-4 lg:px-8 pt-6 flex-1 w-full">
                         {/* Row 1: Search / Sort / View / Filter toggle */}
                         <div className="flex flex-col md:flex-row gap-2.5 mb-3 items-stretch md:items-center">
-                            <div className="relative flex-1">
-                                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-m3-onSurfaceVariant">
-                                    <span className="material-symbols-rounded">search</span>
+                            <div className="relative flex-1 group m3-bounce focus-within:scale-[1.01]">
+                                <div className="absolute inset-y-0 left-2 flex items-center pointer-events-none">
+                                    <span className="w-8 h-8 rounded-full bg-m3-primaryContainer text-m3-onPrimaryContainer flex items-center justify-center transition-colors group-focus-within:bg-m3-primary group-focus-within:text-m3-onPrimary">
+                                        <span className="material-symbols-rounded text-lg">search</span>
+                                    </span>
                                 </div>
                                 <input
                                     ref={searchInputRef}
@@ -1454,12 +1531,12 @@
                                     placeholder="アプリ名・説明・カテゴリ・URLで検索... ( / でフォーカス)"
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
-                                    className="w-full pl-12 pr-10 py-3.5 bg-m3-surfaceContainerHigh text-m3-onSurface rounded-m3-3xl focus:ring-2 focus:ring-m3-primary outline-none transition-all placeholder:text-m3-onSurfaceVariant/70 text-sm md:text-base shadow-sm"
+                                    className="w-full pl-14 pr-10 py-3.5 bg-m3-surfaceContainerHigh text-m3-onSurface rounded-m3-3xl focus:ring-2 focus:ring-m3-primary outline-none transition-all placeholder:text-m3-onSurfaceVariant/70 text-sm md:text-base shadow-sm focus:shadow-md"
                                 />
                                 {searchQuery && (
                                     <button
                                         onClick={() => setSearchQuery('')}
-                                        className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-m3-onSurfaceVariant hover:text-m3-onSurface"
+                                        className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-m3-onSurfaceVariant hover:text-m3-onSurface m3-bounce"
                                     >
                                         <span className="material-symbols-rounded text-xl">close</span>
                                     </button>
@@ -1467,7 +1544,7 @@
                             </div>
 
                             <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
-                                <div className="relative">
+                                <div className="relative m3-bounce hover:-translate-y-0.5">
                                     <select
                                         value={sortBy}
                                         onChange={(e) => setSortBy(e.target.value)}
@@ -1487,14 +1564,14 @@
                                 <div className="inline-flex rounded-m3-full bg-m3-surfaceContainerHigh p-1 shadow-sm">
                                     <button
                                         onClick={() => setSelectedIconFilter('ALL')}
-                                        className={`px-3.5 py-2 rounded-m3-full text-xs font-medium transition-all ${selectedIconFilter === 'ALL' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
+                                        className={`px-3.5 py-2 rounded-m3-full text-xs font-medium m3-bounce ${selectedIconFilter === 'ALL' ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
                                         title="すべて表示"
                                     >
                                         すべて
                                     </button>
                                     <button
                                         onClick={() => setSelectedIconFilter('gas')}
-                                        className={`px-3 py-2 rounded-m3-full text-xs font-medium transition-all flex items-center gap-1.5 ${selectedIconFilter === 'gas' ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
+                                        className={`px-3 py-2 rounded-m3-full text-xs font-medium flex items-center gap-1.5 m3-bounce ${selectedIconFilter === 'gas' ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
                                         title="GASのみ表示"
                                     >
                                         <GasIcon className="w-4 h-4" />
@@ -1502,7 +1579,7 @@
                                     </button>
                                     <button
                                         onClick={() => setSelectedIconFilter('github')}
-                                        className={`px-3 py-2 rounded-m3-full text-xs font-medium transition-all flex items-center gap-1.5 ${selectedIconFilter === 'github' ? 'bg-[#24292F] text-white shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
+                                        className={`px-3 py-2 rounded-m3-full text-xs font-medium flex items-center gap-1.5 m3-bounce ${selectedIconFilter === 'github' ? 'bg-[#24292F] text-white shadow-sm' : 'text-m3-onSurfaceVariant hover:text-m3-onSurface'}`}
                                         title="GitHubのみ表示"
                                     >
                                         <GithubIcon className="w-4 h-4" />
@@ -1513,14 +1590,14 @@
                                 <div className="inline-flex rounded-m3-full bg-m3-surfaceContainerHigh p-1 shadow-sm">
                                     <button
                                         onClick={() => setViewMode('grid')}
-                                        className={`p-2.5 rounded-m3-full transition-all flex items-center justify-center ${viewMode === 'grid' ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
+                                        className={`p-2.5 rounded-m3-full flex items-center justify-center m3-bounce ${viewMode === 'grid' ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
                                         title="グリッド表示"
                                     >
                                         <span className="material-symbols-rounded text-base leading-none">grid_view</span>
                                     </button>
                                     <button
                                         onClick={() => setViewMode('list')}
-                                        className={`p-2.5 rounded-m3-full transition-all flex items-center justify-center ${viewMode === 'list' ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
+                                        className={`p-2.5 rounded-m3-full flex items-center justify-center m3-bounce ${viewMode === 'list' ? 'bg-m3-primary text-m3-onPrimary' : 'text-m3-onSurfaceVariant'}`}
                                         title="リスト表示"
                                     >
                                         <span className="material-symbols-rounded text-base leading-none">view_list</span>
@@ -1530,18 +1607,10 @@
                         </div>
 
                         {/* Row 2: Collapsible filter panel */}
-                        <div className="bg-m3-surfaceContainerLow rounded-m3-xl p-3 mb-5">
-                            <div className="flex items-center justify-between mb-2.5">
-                                <button
-                                    onClick={() => setFavoritesOnly(v => !v)}
-                                    className={`px-4 py-2 rounded-m3-full text-xs md:text-sm font-medium flex items-center gap-1.5 shadow-sm m3-bounce ${favoritesOnly ? 'bg-amber-400 text-white' : 'bg-m3-surfaceContainerHigh text-m3-onSurfaceVariant hover:text-amber-500'}`}
-                                >
-                                    <span className={`material-symbols-rounded text-base ${favoritesOnly ? 'fill' : ''}`}>star</span>
-                                    <span>お気に入りのみ</span>
-                                </button>
-
+                        <div className="bg-m3-surfaceContainerLow rounded-m3-2xl p-3.5 mb-5">
+                            <div className="flex items-center justify-end mb-2.5">
                                 {activeFilterCount > 0 && (
-                                    <button onClick={clearFilters} className="text-xs font-medium text-m3-primary hover:underline flex items-center gap-1 flex-shrink-0 ml-2">
+                                    <button onClick={clearFilters} className="px-3 py-1.5 rounded-m3-full bg-m3-surfaceContainerHighest text-xs font-medium text-m3-primary flex items-center gap-1 flex-shrink-0 ml-2 m3-bounce">
                                         <span className="material-symbols-rounded text-sm">filter_alt_off</span>
                                         <span className="hidden sm:inline">フィルター解除</span>
                                     </button>
@@ -1558,7 +1627,7 @@
                                             // 同じものをもう一度押すと選択解除。
                                             setSelectedCategories(prev => (prev.length === 1 && prev[0] === cat) ? [] : [cat]);
                                         }}
-                                        className={`px-4 py-2 rounded-m3-l text-xs md:text-sm font-medium whitespace-nowrap m3-bounce ${
+                                        className={`px-4 py-2 rounded-m3-full text-xs md:text-sm font-medium whitespace-nowrap m3-bounce ${
                                             (cat === 'ALL' ? selectedCategories.length === 0 : selectedCategories.includes(cat))
                                                 ? 'bg-m3-primaryContainer text-m3-onPrimaryContainer shadow-sm font-bold'
                                                 : 'bg-m3-surfaceContainer text-m3-onSurfaceVariant hover:bg-m3-surfaceContainerHigh'
@@ -1995,7 +2064,7 @@
 
 const SHEET_NAME = 'Apps';
 const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'iconBgColor', 'cardColor', 'isFavorite', 'createdAt', 'updatedAt', 'lastOpenedAt', 'openCount'];
-const CODE_VERSION = 'v13-robust-header-match-2026-09';
+const CODE_VERSION = 'v14-selfheal-testrows-2026-09';
 
 // 見出し名の比較用に正規化する（前後の空白を除去し、小文字化する）。
 // これにより、スプレッドシート側の見出しセルが "ID" や " id " のように
@@ -2055,6 +2124,22 @@ function findRow_(sheet, id, headerMap) {
   return -1;
 }
 
+// findRow_は最初に見つかった1件しか返さないため、過去のバグ等で同じidの行が
+// 複数できてしまっているケースに対応できなかった（削除が1件しか効かず、
+// 残った行がカードとして残り続けて見えるバグの一因になっていた）。
+// この関数はidが一致するすべての行番号を返す（v14で追加）。
+function findAllRows_(sheet, id, headerMap) {
+  const idCol = headerMap['id'];
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2 || idCol === undefined) return [];
+  const ids = sheet.getRange(2, idCol + 1, lastRow - 1, 1).getValues();
+  const rows = [];
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) rows.push(i + 2);
+  }
+  return rows;
+}
+
 function saveAppRow_(sheet, app) {
   const headerMap = getHeaderMap_(sheet);
   const lastCol = sheet.getLastColumn();
@@ -2099,6 +2184,11 @@ function doGet(e) {
       values.forEach(row => {
         const idCol = headerMap['id'];
         if (idCol === undefined || !row[idCol]) return;
+        // 接続テストが作るテスト用の行(idが"__connection_test__"で始まる)は、
+        // 本来テスト終了時に自動削除されるが、通信エラー等で削除に失敗した場合の保険として、
+        // 一覧には常に出さないようにしておく（v14: 「テストのカードを自分で消さないと
+        // いけない」問題の根本対策）。
+        if (String(row[idCol]).indexOf('__connection_test__') === 0) return;
         const obj = {};
         HEADERS.forEach(h => { obj[h] = headerMap[h] !== undefined ? row[headerMap[h]] : ''; });
         obj.isFavorite = (obj.isFavorite === true || String(obj.isFavorite).toLowerCase() === 'true');
@@ -2125,9 +2215,12 @@ function doGet(e) {
 
   if (action === 'delete') {
     try {
-      const rowIndex = findRow_(sheet, e.parameter.id, headerMap);
-      if (rowIndex !== -1) sheet.deleteRow(rowIndex);
-      return jsonOut_({ success: true });
+      // 一致する行が複数あっても全部消す（v14: 以前は最初の1件しか消しておらず、
+      // 重複行が残ってしまうことがあった）。行番号が大きい方から消すことで、
+      // 削除のたびに残りの行番号がズレる問題を避ける。
+      const rows = findAllRows_(sheet, e.parameter.id, headerMap).sort((a, b) => b - a);
+      rows.forEach(r => sheet.deleteRow(r));
+      return jsonOut_({ success: true, deletedCount: rows.length });
     } catch (err) {
       return jsonOut_({ error: String(err) });
     }
@@ -2166,7 +2259,7 @@ function doPost(e) {
             return (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
                     <div
-                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-md rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh]"
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-md rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] animate-m3e-pop"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="overflow-y-auto flex-1 p-6">
@@ -2275,7 +2368,7 @@ function doPost(e) {
             return (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
                     <div
-                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-xs rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col items-center p-6 animate-slide-up"
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-xs rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col items-center p-6 animate-m3e-pop"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="w-full flex items-center justify-between mb-4">
@@ -2307,7 +2400,7 @@ function doPost(e) {
             return (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
                     <div
-                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-m3e-pop"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="px-6 py-4.5 bg-m3-surfaceContainerHighest flex items-center justify-between">
@@ -2391,7 +2484,7 @@ function doPost(e) {
             return (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
                     <div
-                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-m3e-pop"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="px-6 py-4.5 bg-m3-surfaceContainerHighest flex items-center justify-between">
@@ -2518,8 +2611,24 @@ function doPost(e) {
                     const listData2 = await listRes2.json();
                     const matches = (listData2.apps || []).filter(a => String(a.id) === String(testId));
 
-                    // 後片付け（見つかった分はすべて削除しておく）
-                    try { await fetch(`${trimmed}?action=delete&id=${encodeURIComponent(testId)}`); } catch (e) {}
+                    // 後片付け：見つかった分はすべて削除する。
+                    // さらに、削除リクエストが通信エラー等で失敗し「テストカードが
+                    // 消えずに残ってしまう」ことがないよう、本当に消えたかを再取得して確認し、
+                    // 消えていなければ数回リトライする（v14: 「テストのカードを自分で
+                    // 消さないといけない」問題への対策）。
+                    let cleanupOk = false;
+                    for (let attempt = 0; attempt < 3 && !cleanupOk; attempt++) {
+                        try {
+                            await fetch(`${trimmed}?action=delete&id=${encodeURIComponent(testId)}`);
+                        } catch (e) { /* 次のリトライに任せる */ }
+                        try {
+                            const checkRes = await fetch(`${trimmed}?action=list`);
+                            const checkData = await checkRes.json();
+                            cleanupOk = !(checkData.apps || []).some(a => String(a.id) === String(testId));
+                        } catch (e) {
+                            // 確認自体が失敗した場合はもう一度削除を試みる
+                        }
+                    }
 
                     if (matches.length > 1) {
                         throw new Error(`更新が別の行として保存されてしまっています（同じidの行が${matches.length}件重複）。スプレッドシートの「Apps」シートの1行目（見出し行）が、GASコードが期待する見出し名と一致しているか確認してください（余計な空白や表記ゆれがあると起こります）。`);
@@ -2527,9 +2636,12 @@ function doPost(e) {
                     if (matches.length === 1 && matches[0].title !== updatedTitle) {
                         throw new Error('更新した内容がスプレッドシートに反映されていません。GASコードが最新版か（再デプロイ済みか）確認してください。');
                     }
+                    if (!cleanupOk) {
+                        throw new Error(`読み取り・書き込みは正常でしたが、テスト用の行の後片付け（削除）に失敗しました。スプレッドシートの「Apps」シートに残っている「${updatedTitle}」という行を手動で削除してください。`);
+                    }
 
                     setTestState('success');
-                    setTestMessage(`接続成功：読み取り・新規追加・更新（上書き）のすべてが正常に動作しています（現在${Array.isArray(data.apps) ? data.apps.length : 0}件保存中 / GASバージョン: ${version}）`);
+                    setTestMessage(`接続成功：読み取り・新規追加・更新（上書き）・後片付けのすべてが正常に動作しています（現在${Array.isArray(data.apps) ? data.apps.length : 0}件保存中 / GASバージョン: ${version}）`);
                 } catch (err) {
                     setTestState('error');
                     setTestMessage(err.message || String(err));
@@ -2539,7 +2651,7 @@ function doPost(e) {
             return (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
                     <div
-                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-xl rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-xl rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] animate-m3e-pop"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="px-6 py-4.5 bg-m3-surfaceContainerHighest flex items-center justify-between">
@@ -2834,6 +2946,14 @@ function doPost(e) {
                 });
             };
 
+            // Ctrl/Cmd+Enterでどの入力欄からでも送信できるようにする
+            const handleFormKeyDown = (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    handleSubmit(e);
+                }
+            };
+
             const handleTestLink = () => {
                 if (url && /^https?:\/\/.+/i.test(url.trim())) {
                     window.open(url.trim(), '_blank', 'noopener,noreferrer');
@@ -2863,7 +2983,7 @@ function doPost(e) {
                     onClick={onClose}
                 >
                     <div
-                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+                        className="bg-m3-surfaceContainerHigh text-m3-onSurface w-full max-w-lg rounded-m3-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] animate-m3e-pop"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="px-6 py-5 bg-m3-primaryContainer text-m3-onPrimaryContainer flex items-center justify-between">
@@ -2882,7 +3002,7 @@ function doPost(e) {
                             </button>
                         </div>
 
-                        <form onSubmit={handleSubmit} className="p-5 overflow-y-auto flex-1 space-y-4 bg-m3-surfaceContainerLow">
+                        <form onSubmit={handleSubmit} onKeyDown={handleFormKeyDown} className="p-5 overflow-y-auto flex-1 space-y-4 bg-m3-surfaceContainerLow">
                             {draftRestored && (
                                 <div className="flex items-center justify-between gap-2 bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-xs font-medium px-3.5 py-2.5 rounded-m3-l">
                                     <span className="flex items-center gap-1.5">
@@ -2924,6 +3044,7 @@ function doPost(e) {
                                 <div className="relative">
                                     <input
                                         type="url"
+                                        autoFocus={!editingApp?.id}
                                         placeholder="https://script.google.com/... または https://github.com/..."
                                         value={url}
                                         onChange={(e) => handleUrlChange(e.target.value)}
@@ -3236,11 +3357,11 @@ function doPost(e) {
                                         内部メモ（自分用・任意）
                                     </label>
                                     <textarea
-                                        rows="2"
+                                        rows="6"
                                         placeholder="バグ・TODO・次にやることなど、自分用の作業メモ"
                                         value={memo}
                                         onChange={(e) => setMemo(e.target.value)}
-                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-none"
+                                        className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-y min-h-[8rem]"
                                     ></textarea>
                                     <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ カードでは折りたたまれており、アイコンをタップした時だけ表示されます。</p>
                                 </div>
@@ -3277,7 +3398,7 @@ function doPost(e) {
                                     <button type="button" onClick={onClose} className="px-5 py-2.5 text-m3-onSurfaceVariant font-medium text-sm rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors">
                                         キャンセル
                                     </button>
-                                    <button type="submit" className="px-6 py-2.5 bg-m3-primary text-m3-onPrimary font-medium text-sm rounded-m3-full hover:shadow-md m3-bounce">
+                                    <button type="submit" title="Ctrl/Cmd + Enterでも送信できます" className="px-6 py-2.5 bg-m3-primary text-m3-onPrimary font-medium text-sm rounded-m3-full hover:shadow-md m3-bounce">
                                         {editingApp?.id ? '更新を保存' : '登録する'}
                                     </button>
                                 </div>
