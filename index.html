@@ -51,7 +51,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.10.0';
+        window.__APP_VERSION__ = '2.11.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -245,7 +245,7 @@
         const PENDING_QUEUE_KEY = 'm3_app_hub_pending_queue';
         // GASコードのバージョン。GAS_CODE_SNIPPET内のCODE_VERSIONと必ず同じ値に保つこと。
         // 一致しない場合、古いGASコードのまま（新しい項目が保存されない等の原因）と判断して警告を出す。
-        const EXPECTED_GAS_VERSION = 'v12-iconbgcolor-2026-09';
+        const EXPECTED_GAS_VERSION = 'v13-robust-header-match-2026-09';
         const genOpId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         // --- GAS(Firebase連携)APIクライアント ---
@@ -1979,15 +1979,30 @@
 // ※ 一覧取得(list)・削除(delete)はGET、保存(save)はPOSTで実装しています。
 //    保存はアプリの情報量が多いとURLの長さ制限に引っかかりGETでは失敗することがあるため、
 //    データ量に上限のないPOSTに変更しています。
-// ※ 重要な修正: 以前は新しい項目を追加するたびに「見出し行の文字だけ」を書き換えており、
+// ※ 重要な修正(v12まで): 以前は新しい項目を追加するたびに「見出し行の文字だけ」を書き換えており、
 //    その下の既存データは移動していませんでした。そのためアプリを更新するたびに
 //    列がズレて、保存されたはずのデータが違う項目として読み込まれる不具合がありました。
-//    今回から、列の位置ではなく「見出しの名前」で必ず参照する方式に変更したため、
-//    今後アプリ側で項目が増えても既存データがズレることはありません。
+//    v12で、列の位置ではなく「見出しの名前」で必ず参照する方式に変更しました。
+// ※ さらに重要な修正(v13): 見出し名の一致判定が「完全一致」だったため、スプレッドシート側の
+//    見出しセルに余計な空白が入っていたり大文字/小文字が違うだけで「id列が見つからない」と
+//    判定され、毎回どこにも一致しない新しいid列を末尾に追加してしまっていました。
+//    この状態になると findRow_() が既存の行を絶対に見つけられなくなるため、
+//    「更新（保存）」を押しても実際には常に「新しい行として追加」されてしまい、
+//    アプリの一覧（元のセルの値を読む画面）には反映されない、という不具合の原因になっていました。
+//    v13では見出し名の比較を trim + 大文字小文字を無視した形に変更し、この問題を防ぎます。
+// ※ v13でさらに、同時に複数の保存リクエストが来た際に行がぶつからないよう
+//    LockServiceによる排他制御を追加しました。
 
 const SHEET_NAME = 'Apps';
 const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'iconBgColor', 'cardColor', 'isFavorite', 'createdAt', 'updatedAt', 'lastOpenedAt', 'openCount'];
-const CODE_VERSION = 'v12-iconbgcolor-2026-09';
+const CODE_VERSION = 'v13-robust-header-match-2026-09';
+
+// 見出し名の比較用に正規化する（前後の空白を除去し、小文字化する）。
+// これにより、スプレッドシート側の見出しセルが "ID" や " id " のように
+// 微妙に違っていても、同じ項目として正しく認識できるようにする。
+function normalizeHeader_(h) {
+  return String(h == null ? '' : h).trim().toLowerCase();
+}
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1998,10 +2013,12 @@ function getSheet_() {
     return sheet;
   }
   // 既存シートに無い項目だけを「末尾に新しい列として追加」する。
-  // 既存の列の位置・データは一切変更しない（これが今回の修正の核心）。
+  // 既存の列の位置・データは一切変更しない。
+  // 比較はnormalizeHeader_()を通した「揺れに強い」形で行う（v13での修正点）。
   const lastCol = sheet.getLastColumn();
   const existingHeaders = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
-  const missing = HEADERS.filter(h => existingHeaders.indexOf(h) === -1);
+  const existingNormalized = existingHeaders.map(normalizeHeader_);
+  const missing = HEADERS.filter(h => existingNormalized.indexOf(normalizeHeader_(h)) === -1);
   if (missing.length > 0) {
     sheet.getRange(1, lastCol + 1, 1, missing.length).setValues([missing]);
   }
@@ -2010,9 +2027,16 @@ function getSheet_() {
 
 function getHeaderMap_(sheet) {
   const lastCol = sheet.getLastColumn();
-  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const headers = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  // 実際の見出し行(正規化済み) → 列番号 のマップをまず作り、
+  // そこから HEADERS の正式名 → 列番号 のマップを引く（v13での修正点・上記参照）。
+  const normalizedToCol = {};
+  headers.forEach((h, i) => { normalizedToCol[normalizeHeader_(h)] = i; });
   const map = {};
-  headers.forEach((h, i) => { map[h] = i; }); // 0-indexed列番号
+  HEADERS.forEach(h => {
+    const col = normalizedToCol[normalizeHeader_(h)];
+    if (col !== undefined) map[h] = col; // 0-indexed列番号
+  });
   return map;
 }
 
@@ -2114,6 +2138,14 @@ function doGet(e) {
 
 function doPost(e) {
   e = e || {};
+  // 保存中に別の保存リクエストが割り込んで同じ行を取り合う（＝片方の更新が消える）
+  // ことがないよう、書き込み中はロックする（v13で追加）。
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (lockErr) {
+    return jsonOut_({ error: '他の保存処理と混み合っています。数秒待って再度お試しください。' });
+  }
   try {
     const body = JSON.parse((e.postData && e.postData.contents) || '{}');
     const sheet = getSheet_();
@@ -2124,6 +2156,8 @@ function doPost(e) {
     return jsonOut_({ error: 'unknown POST action: ' + JSON.stringify(body.action) });
   } catch (err) {
     return jsonOut_({ error: String(err) });
+  } finally {
+    lock.releaseLock();
   }
 }`;
 
@@ -2450,29 +2484,52 @@ function doPost(e) {
 
                     // 読み取りだけでなく、お気に入り等と同じ経路（POSTでの保存）が
                     // 実際に書き込めるかもここで確認する。テスト用の行はすぐ削除する。
-                    setTestMessage('書き込み（保存）を確認中...');
+                    setTestMessage('書き込み（新規追加）を確認中...');
                     const testId = '__connection_test__' + Date.now();
-                    const testApp = { id: testId, title: '[接続テスト・自動削除されます]', url: 'https://example.com', category: '', iconType: 'default' };
-                    const saveRes = await fetch(trimmed, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                        body: JSON.stringify({ action: 'save', app: testApp })
-                    });
-                    const saveText = await saveRes.text();
-                    let saveData;
-                    try {
-                        saveData = JSON.parse(saveText);
-                    } catch (e) {
-                        throw new Error('保存(書き込み)の応答が解析できませんでした。GASコードが最新か確認してください。');
-                    }
-                    if (!saveRes.ok || saveData.error || !saveData.success) {
-                        throw new Error('保存(書き込み)のテストに失敗しました: ' + (saveData.error || `HTTP ${saveRes.status}`));
-                    }
-                    // 後片付け
+                    const doSave = async (title) => {
+                        const testApp = { id: testId, title, url: 'https://example.com', category: '', iconType: 'default' };
+                        const saveRes = await fetch(trimmed, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                            body: JSON.stringify({ action: 'save', app: testApp })
+                        });
+                        const saveText = await saveRes.text();
+                        let saveData;
+                        try {
+                            saveData = JSON.parse(saveText);
+                        } catch (e) {
+                            throw new Error('保存(書き込み)の応答が解析できませんでした。GASコードが最新か確認してください。');
+                        }
+                        if (!saveRes.ok || saveData.error || !saveData.success) {
+                            throw new Error('保存(書き込み)のテストに失敗しました: ' + (saveData.error || `HTTP ${saveRes.status}`));
+                        }
+                    };
+                    await doSave('[接続テスト・自動削除されます]');
+
+                    // ここが今回の要点：新規追加だけでなく「同じidで再保存したときに、
+                    // 別の行として増えるのではなく、ちゃんと同じ行が上書きされるか」まで確認する。
+                    // これができていないと「更新ボタンを押しても保存されない（実際には
+                    // 見えない場所に新しい行が増えているだけ）」という不具合に気づけない。
+                    setTestMessage('書き込み（更新の上書き）を確認中...');
+                    const updatedTitle = '[接続テスト・更新確認・自動削除されます]';
+                    await doSave(updatedTitle);
+
+                    const listRes2 = await fetch(`${trimmed}?action=list`);
+                    const listData2 = await listRes2.json();
+                    const matches = (listData2.apps || []).filter(a => String(a.id) === String(testId));
+
+                    // 後片付け（見つかった分はすべて削除しておく）
                     try { await fetch(`${trimmed}?action=delete&id=${encodeURIComponent(testId)}`); } catch (e) {}
 
+                    if (matches.length > 1) {
+                        throw new Error(`更新が別の行として保存されてしまっています（同じidの行が${matches.length}件重複）。スプレッドシートの「Apps」シートの1行目（見出し行）が、GASコードが期待する見出し名と一致しているか確認してください（余計な空白や表記ゆれがあると起こります）。`);
+                    }
+                    if (matches.length === 1 && matches[0].title !== updatedTitle) {
+                        throw new Error('更新した内容がスプレッドシートに反映されていません。GASコードが最新版か（再デプロイ済みか）確認してください。');
+                    }
+
                     setTestState('success');
-                    setTestMessage(`接続成功：読み取り・書き込みとも正常に動作しています（現在${Array.isArray(data.apps) ? data.apps.length : 0}件保存中 / GASバージョン: ${version}）`);
+                    setTestMessage(`接続成功：読み取り・新規追加・更新（上書き）のすべてが正常に動作しています（現在${Array.isArray(data.apps) ? data.apps.length : 0}件保存中 / GASバージョン: ${version}）`);
                 } catch (err) {
                     setTestState('error');
                     setTestMessage(err.message || String(err));
