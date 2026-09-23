@@ -46,12 +46,16 @@
             color: #001D36;
         }
         html.dark #static-splash .app-version { color: #D1E4FF; }
+        #static-splash .spinner-wrap { position: relative; width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; }
+        #static-splash .spinner-wrap .bubble { position: relative; z-index: 1; }
+        #static-splash .static-spinner { position: absolute; inset: -8px; color: rgba(0, 97, 164, 0.3); }
+        html.dark #static-splash .static-spinner { color: rgba(158, 202, 255, 0.3); }
     </style>
     <script>
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.14.0';
+        window.__APP_VERSION__ = '2.16.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -221,6 +225,25 @@
         }
         .animate-splash-text { animation: splashText 0.5s ease 0.25s both; }
 
+        /* Material 3: 円形の読み込みインジケータ（indeterminate circular progress）。
+           同期中・起動時など「処理中」を示す場面はすべてこれに統一する。 */
+        @keyframes m3SpinnerRotate {
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes m3SpinnerDash {
+            0% { stroke-dasharray: 1, 200; stroke-dashoffset: 0; }
+            50% { stroke-dasharray: 100, 200; stroke-dashoffset: -22; }
+            100% { stroke-dasharray: 100, 200; stroke-dashoffset: -124; }
+        }
+        .m3-spinner { animation: m3SpinnerRotate 1.6s linear infinite; }
+        .m3-spinner circle {
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 4;
+            stroke-linecap: round;
+            animation: m3SpinnerDash 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        }
+
         /* カード・行のスタガー表示アニメーション */
         @keyframes cardIn {
             from { opacity: 0; transform: translateY(14px) scale(0.97); }
@@ -240,7 +263,10 @@
 <body>
     <div id="root">
         <div id="static-splash">
-            <div class="bubble"></div>
+            <div class="spinner-wrap">
+                <svg class="m3-spinner static-spinner" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20"></circle></svg>
+                <div class="bubble"></div>
+            </div>
             <div class="app-name">アプリハブ</div>
             <div class="app-version">v<span id="static-splash-version"></span></div>
         </div>
@@ -395,6 +421,14 @@
 
         const GlobeIcon = ({ className = "w-6 h-6" }) => (
             <span className={`material-symbols-rounded ${className}`}>language</span>
+        );
+
+        // Material 3の円形インジケータ(indeterminate)。同期中・起動時などの
+        // 「処理中」表示をすべてこれに統一する（色は親のtext-colorに追従）。
+        const M3Spinner = ({ size = 20, className = "" }) => (
+            <svg className={`m3-spinner ${className}`} style={{ width: size, height: size }} viewBox="0 0 50 50">
+                <circle cx="25" cy="25" r="20" />
+            </svg>
         );
 
         const AppIconDisplay = ({ type, imageUrl, iconName, iconBgColor, size = "md" }) => {
@@ -1289,11 +1323,12 @@
                             <div className="w-20 h-20 rounded-m3-3xl bg-m3-primary text-m3-onPrimary flex items-center justify-center shadow-2xl animate-splash-pop">
                                 <span className="material-symbols-rounded text-4xl">grid_view</span>
                             </div>
-                            <h1 className="mt-5 text-2xl font-extrabold text-m3-onPrimaryContainer tracking-tight animate-splash-text">アプリハブ</h1>
+                            <M3Spinner size={28} className="mt-4 text-m3-primary/70 animate-splash-text" />
+                            <h1 className="mt-4 text-2xl font-extrabold text-m3-onPrimaryContainer tracking-tight animate-splash-text">アプリハブ</h1>
                             <p className="mt-1 text-xs font-medium text-m3-onPrimaryContainer/70 animate-splash-text">v{APP_VERSION}</p>
                             {splashSyncing && (
                                 <div className="mt-5 flex items-center gap-2 text-m3-onPrimaryContainer/80 animate-splash-text">
-                                    <span className="w-4 h-4 border-2 border-m3-onPrimaryContainer/30 border-t-m3-onPrimaryContainer rounded-full animate-spin"></span>
+                                    <M3Spinner size={16} />
                                     <span className="text-xs font-medium">スプレッドシートと同期中...</span>
                                 </div>
                             )}
@@ -1713,7 +1748,7 @@
                                             <div className="mb-2">
                                                 <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
                                                     {splitCategories(app.category).map(tag => (
-                                                        <span key={tag} className={`group/tag inline-flex items-center gap-1 text-[10px] font-bold pl-2.5 pr-1 py-0.5 rounded-m3-s ${categoryColor(tag)}`}>
+                                                        <span key={tag} className={`group/tag inline-flex items-center gap-1 text-[10px] font-bold pl-2.5 pr-1 py-0.5 rounded-full ${categoryColor(tag)}`}>
                                                             {tag}
                                                             <button
                                                                 onClick={(e) => handleRemoveTagFromApp(app.id, tag, e)}
@@ -1725,10 +1760,10 @@
                                                         </span>
                                                     ))}
                                                     {getPlatform(app) === 'gas' && (
-                                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-m3-s bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300">GAS</span>
+                                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300">GAS</span>
                                                     )}
                                                     {getPlatform(app) === 'github' && (
-                                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-m3-s bg-gray-800 text-gray-100">GitHub</span>
+                                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-800 text-gray-100">GitHub</span>
                                                     )}
                                                 </div>
                                                 <div className="flex items-center gap-1.5">
@@ -1738,7 +1773,7 @@
                                                         {highlightMatch(app.title, searchQuery)}
                                                     </h2>
                                                     {app.version && (
-                                                        <span className="flex-shrink-0 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-m3-s bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant">
+                                                        <span className="flex-shrink-0 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant">
                                                             v{app.version}
                                                         </span>
                                                     )}
@@ -1818,7 +1853,7 @@
                                     <div
                                         key={app.id}
                                         onClick={() => { if (selectMode) toggleSelectId(app.id); else setDetailApp(app); }}
-                                        className={`m3-card animate-card-in group flex items-center justify-between bg-m3-surfaceContainer rounded-m3-xl p-4 hover:bg-m3-surfaceContainerHigh hover:shadow-md transition-all gap-4 cursor-pointer ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
+                                        className={`m3-card animate-card-in group flex items-center justify-between bg-m3-surfaceContainer rounded-m3-2xl p-4 hover:bg-m3-surfaceContainerHigh hover:shadow-md transition-all gap-4 cursor-pointer ${selectedIds.includes(app.id) ? 'ring-2 ring-m3-primary' : ''}`}
                                         style={{
                                             animationDelay: `${Math.min(index * 30, 300)}ms`,
                                             borderLeft: cardColorHex(app.cardColor) ? `5px solid ${cardColorHex(app.cardColor)}` : undefined
@@ -1839,12 +1874,12 @@
                                                         {highlightMatch(app.title, searchQuery)}
                                                     </h2>
                                                     {app.version && (
-                                                        <span className="flex-shrink-0 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-m3-s bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant">
+                                                        <span className="flex-shrink-0 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-m3-surfaceContainerHighest text-m3-onSurfaceVariant">
                                                             v{app.version}
                                                         </span>
                                                     )}
                                                     {splitCategories(app.category).slice(0, 2).map(tag => (
-                                                        <span key={tag} className={`hidden sm:inline-block text-[10px] font-bold px-2 py-0.5 rounded-m3-s flex-shrink-0 ${categoryColor(tag)}`}>
+                                                        <span key={tag} className={`hidden sm:inline-block text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${categoryColor(tag)}`}>
                                                             {tag}
                                                         </span>
                                                     ))}
@@ -1981,7 +2016,7 @@
 
                     {savingOverlay && (
                         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
-                            <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mb-5"></div>
+                            <M3Spinner size={56} className="text-white mb-5" />
                             <p className="text-white text-base font-bold">スプレッドシートに保存中...</p>
                             <p className="text-white/70 text-xs mt-1.5">保存が完了するまでこのまま少々お待ちください</p>
                         </div>
