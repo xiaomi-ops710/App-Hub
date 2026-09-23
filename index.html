@@ -27,35 +27,129 @@
         #static-splash {
             position: fixed; inset: 0; z-index: 999;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: #D1E4FF;
+            background: radial-gradient(circle at 50% 35%, #E3EDFF 0%, #D1E4FF 55%, #BBD3F5 100%);
+            background-size: 140% 140%;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+            animation: splashBgBreathe 6s ease-in-out infinite;
         }
-        html.dark #static-splash { background: #00497D; }
+        html.dark #static-splash { background: radial-gradient(circle at 50% 35%, #06355C 0%, #00497D 55%, #003259 100%); background-size: 140% 140%; }
+        @keyframes splashBgBreathe {
+            0%, 100% { background-position: 50% 40%; }
+            50% { background-position: 50% 60%; }
+        }
+        /* 背景でゆっくり漂う、ぼかしたブロブ（装飾） */
+        #static-splash::before, #static-splash::after {
+            content: ''; position: absolute; border-radius: 50%; filter: blur(40px); opacity: 0.35;
+            background: #0061A4;
+        }
+        #static-splash::before { width: 220px; height: 220px; top: 8%; left: 8%; animation: splashDrift 7s ease-in-out infinite; }
+        #static-splash::after { width: 260px; height: 260px; bottom: 6%; right: 6%; background: #7D5260; animation: splashDrift 9s ease-in-out infinite reverse; }
+        html.dark #static-splash::before { background: #9ECAFF; opacity: 0.15; }
+        html.dark #static-splash::after { background: #EFB8C8; opacity: 0.12; }
+        #static-splash .blob3 {
+            content: ''; position: absolute; width: 180px; height: 180px; border-radius: 50%;
+            filter: blur(36px); opacity: 0.28; background: #386A20; top: 55%; left: 65%;
+            animation: splashDrift 10.5s ease-in-out infinite;
+        }
+        html.dark #static-splash .blob3 { background: #A6D388; opacity: 0.1; }
+        @keyframes splashDrift {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            50% { transform: translate(20px, -16px) scale(1.08); }
+        }
+        /* アイコン周りにきらめく粒子 */
+        #static-splash .sparkle {
+            position: absolute; border-radius: 50%; background: #0061A4; opacity: 0;
+            animation: splashSparkle 2.6s ease-in-out infinite;
+        }
+        html.dark #static-splash .sparkle { background: #D1E4FF; }
+        #static-splash .sparkle:nth-child(1) { width: 6px; height: 6px; top: -6px; right: 6px; animation-delay: 0.2s; }
+        #static-splash .sparkle:nth-child(2) { width: 4px; height: 4px; bottom: 4px; left: -10px; animation-delay: 1s; }
+        #static-splash .sparkle:nth-child(3) { width: 5px; height: 5px; top: 30%; right: -14px; animation-delay: 1.7s; }
+        @keyframes splashSparkle {
+            0%, 100% { transform: scale(0.4); opacity: 0; }
+            50% { transform: scale(1.2); opacity: 0.9; }
+        }
+        #static-splash .halo {
+            position: absolute; width: 130px; height: 130px; top: -25px; left: -25px; border-radius: 50%;
+            background: conic-gradient(from 0deg, transparent 0%, #0061A4 15%, transparent 35%, transparent 65%, #7D5260 80%, transparent 100%);
+            filter: blur(10px); opacity: 0.55; z-index: 0;
+            animation: haloSpin 3.4s linear infinite;
+        }
+        html.dark #static-splash .halo { background: conic-gradient(from 0deg, transparent 0%, #9ECAFF 15%, transparent 35%, transparent 65%, #EFB8C8 80%, transparent 100%); opacity: 0.35; }
+        @keyframes haloSpin { to { transform: rotate(360deg); } }
+        #static-splash .icon-wrap {
+            position: relative; width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; z-index: 1;
+            animation: splashPopIn 0.65s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+        }
+        @keyframes splashPopIn {
+            0% { opacity: 0; transform: scale(0.3) rotate(-12deg); }
+            60% { opacity: 1; transform: scale(1.12) rotate(4deg); }
+            100% { opacity: 1; transform: scale(1) rotate(0deg); }
+        }
+        /* アイコンの周りに広がっては消える脈動リング（2重・時間差） */
+        #static-splash .icon-wrap::before, #static-splash .icon-wrap::after {
+            content: ''; position: absolute; inset: 0; border-radius: 32px;
+            border: 2px solid #0061A4; opacity: 0; animation: splashRing 2.4s ease-out infinite;
+        }
+        #static-splash .icon-wrap::after { animation-delay: 1.2s; }
+        html.dark #static-splash .icon-wrap::before, html.dark #static-splash .icon-wrap::after { border-color: #9ECAFF; }
+        @keyframes splashRing {
+            0% { transform: scale(1); opacity: 0.55; }
+            100% { transform: scale(1.9); opacity: 0; }
+        }
         #static-splash .bubble {
-            width: 80px; height: 80px; border-radius: 32px;
-            background: #0061A4; box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+            width: 80px; height: 80px; border-radius: 32px; position: relative; z-index: 1;
+            background: linear-gradient(155deg, #1A73C4 0%, #0061A4 65%, #00447A 100%);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.25);
+            display: flex; align-items: center; justify-content: center;
         }
-        html.dark #static-splash .bubble { background: #9ECAFF; }
+        html.dark #static-splash .bubble { background: linear-gradient(155deg, #B8D6FF 0%, #9ECAFF 65%, #7DB3EE 100%); }
+        #static-splash .bubble::after {
+            content: ''; position: absolute; inset: 0; border-radius: 32px;
+            background: linear-gradient(115deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0) 35%);
+            animation: splashShine 2.8s ease-in-out infinite;
+        }
+        @keyframes splashShine {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.8; }
+        }
         #static-splash .app-name {
-            margin-top: 20px; font-size: 24px; font-weight: 800; letter-spacing: -0.01em;
-            color: #001D36;
+            margin-top: 18px; font-size: 26px; font-weight: 800; letter-spacing: -0.01em;
+            font-family: 'Space Grotesk', 'Noto Sans JP', sans-serif;
+            color: #001D36; z-index: 1;
         }
+        #static-splash .app-name span { display: inline-block; animation: splashRise 0.4s ease both; }
+        #static-splash .app-name span:nth-child(1) { animation-delay: 0.3s; }
+        #static-splash .app-name span:nth-child(2) { animation-delay: 0.36s; }
+        #static-splash .app-name span:nth-child(3) { animation-delay: 0.42s; }
+        #static-splash .app-name span:nth-child(4) { animation-delay: 0.48s; }
+        #static-splash .app-name span:nth-child(5) { animation-delay: 0.54s; }
         html.dark #static-splash .app-name { color: #D1E4FF; }
+        #static-splash .app-tagline {
+            margin-top: 2px; font-size: 12px; font-weight: 600; opacity: 0.65;
+            color: #001D36; z-index: 1;
+            animation: splashRise 0.4s ease 0.62s both;
+        }
+        html.dark #static-splash .app-tagline { color: #D1E4FF; }
         #static-splash .app-version {
-            margin-top: 4px; font-size: 12px; font-weight: 600; opacity: 0.7;
-            color: #001D36;
+            margin-top: 14px; font-size: 11px; font-weight: 600; opacity: 0.55;
+            color: #001D36; z-index: 1;
+            animation: splashRise 0.4s ease 0.74s both;
         }
         html.dark #static-splash .app-version { color: #D1E4FF; }
-        #static-splash .spinner-wrap { position: relative; width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; }
-        #static-splash .spinner-wrap .bubble { position: relative; z-index: 1; }
-        #static-splash .static-spinner { position: absolute; inset: -8px; color: rgba(0, 97, 164, 0.3); }
-        html.dark #static-splash .static-spinner { color: rgba(158, 202, 255, 0.3); }
+        #static-splash .static-spinner { margin-top: 14px; color: rgba(0, 97, 164, 0.7); z-index: 1; animation: m3SpinnerRotate 1.6s linear infinite, splashRise 0.4s ease 0.7s both; }
+        html.dark #static-splash .static-spinner { color: rgba(158, 202, 255, 0.7); }
+        @keyframes splashRise {
+            0% { opacity: 0; transform: translateY(8px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
     </style>
     <script>
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.18.0';
+        window.__APP_VERSION__ = '2.20.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -71,7 +165,7 @@
     <!-- Google Fonts & Material Symbols Outlined -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&family=Space+Grotesk:wght@500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
     <!-- React & Babel (cdnjs - allowed script host) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
@@ -85,6 +179,7 @@
                 extend: {
                     fontFamily: {
                         sans: ['Roboto', 'Noto Sans JP', 'sans-serif'],
+                        display: ['"Space Grotesk"', 'Noto Sans JP', 'sans-serif'],
                     },
                     colors: {
                         m3: {
@@ -263,11 +358,19 @@
 <body>
     <div id="root">
         <div id="static-splash">
-            <div class="spinner-wrap">
-                <svg class="m3-spinner static-spinner" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20"></circle></svg>
+            <div class="blob3"></div>
+            <div class="icon-wrap">
+                <div class="halo"></div>
+                <span class="sparkle"></span>
+                <span class="sparkle"></span>
+                <span class="sparkle"></span>
                 <div class="bubble"></div>
             </div>
-            <div class="app-name">アプリハブ</div>
+            <svg class="m3-spinner static-spinner" width="28" height="28" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20"></circle></svg>
+            <div class="app-name">
+                <span>ア</span><span>プ</span><span>リ</span><span>ハ</span><span>ブ</span>
+            </div>
+            <div class="app-tagline">自作Webアプリをまとめて管理</div>
             <div class="app-version">v<span id="static-splash-version"></span></div>
         </div>
     </div>
@@ -1379,14 +1482,27 @@
                 <div className="min-h-screen flex flex-col pb-24">
                     {showSplash && (
                         <div
-                            className={`fixed inset-0 z-[200] flex flex-col items-center justify-center bg-m3-primaryContainer transition-opacity duration-500 ${splashFading ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+                            className={`fixed inset-0 z-[200] flex flex-col items-center justify-center bg-m3-primaryContainer transition-opacity duration-500 overflow-hidden ${splashFading ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
                         >
-                            <div className="w-20 h-20 rounded-m3-3xl bg-m3-primary text-m3-onPrimary flex items-center justify-center shadow-2xl animate-splash-pop">
-                                <span className="material-symbols-rounded text-4xl">grid_view</span>
+                            <div className="absolute w-56 h-56 rounded-full bg-m3-primary/20 blur-3xl -top-10 -left-10 animate-float"></div>
+                            <div className="absolute w-64 h-64 rounded-full bg-amber-400/20 blur-3xl -bottom-16 -right-10 animate-float" style={{ animationDelay: '1.5s' }}></div>
+                            <div className="relative w-20 h-20 flex items-center justify-center">
+                                <span className="absolute w-[130px] h-[130px] rounded-full blur-[10px] opacity-50" style={{ background: 'conic-gradient(from 0deg, transparent 0%, var(--m3-primary) 15%, transparent 35%, transparent 65%, #7D5260 80%, transparent 100%)', animation: 'haloSpin 3.4s linear infinite' }}></span>
+                                <span className="absolute inset-0 rounded-m3-3xl border-2 border-m3-primary/60" style={{ animation: 'splashRing 2.4s ease-out infinite' }}></span>
+                                <span className="absolute inset-0 rounded-m3-3xl border-2 border-m3-primary/60" style={{ animation: 'splashRing 2.4s ease-out infinite 1.2s' }}></span>
+                                <div className="relative w-20 h-20 rounded-m3-3xl bg-m3-primary text-m3-onPrimary flex items-center justify-center shadow-2xl overflow-hidden animate-splash-pop">
+                                    <span className="material-symbols-rounded text-4xl">grid_view</span>
+                                    <span className="absolute inset-0" style={{ background: 'linear-gradient(115deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0) 35%)', animation: 'splashShine 2.8s ease-in-out infinite' }}></span>
+                                </div>
                             </div>
                             <M3Spinner size={28} className="mt-4 text-m3-primary/70 animate-splash-text" />
-                            <h1 className="mt-4 text-2xl font-extrabold text-m3-onPrimaryContainer tracking-tight animate-splash-text">アプリハブ</h1>
-                            <p className="mt-1 text-xs font-medium text-m3-onPrimaryContainer/70 animate-splash-text">v{APP_VERSION}</p>
+                            <h1 className="font-display mt-4 text-2xl font-extrabold text-m3-onPrimaryContainer tracking-tight flex">
+                                {'アプリハブ'.split('').map((ch, i) => (
+                                    <span key={i} className="inline-block" style={{ animation: `splashRise 0.4s ease ${0.3 + i * 0.05}s both` }}>{ch}</span>
+                                ))}
+                            </h1>
+                            <p className="mt-0.5 text-xs font-semibold text-m3-onPrimaryContainer/65" style={{ animation: 'splashRise 0.4s ease 0.62s both' }}>自作Webアプリをまとめて管理</p>
+                            <p className="mt-2 text-xs font-medium text-m3-onPrimaryContainer/70" style={{ animation: 'splashRise 0.4s ease 0.7s both' }}>v{APP_VERSION}</p>
                             {splashSyncing && (
                                 <div className="mt-5 flex items-center gap-2 text-m3-onPrimaryContainer/80 animate-splash-text">
                                     <M3Spinner size={16} />
@@ -1402,7 +1518,7 @@
                                     <span className="material-symbols-rounded text-2xl">grid_view</span>
                                 </div>
                                 <div className="min-w-0">
-                                    <h1 className="text-lg sm:text-2xl font-extrabold text-m3-onSurface leading-tight tracking-tight truncate">アプリハブ</h1>
+                                    <h1 className="font-display text-lg sm:text-2xl font-extrabold text-m3-onSurface leading-tight tracking-tight truncate">アプリハブ</h1>
                                     <p className="hidden sm:block text-xs text-m3-onSurfaceVariant truncate">自作WEBアプリ リンクギャラリー・{apps.length}件登録中</p>
                                 </div>
                             </div>
@@ -2091,10 +2207,18 @@
                     )}
 
                     {savingOverlay && (
-                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
-                            <M3Spinner size={56} className="text-white mb-5" />
-                            <p className="text-white text-base font-bold">スプレッドシートに保存中...</p>
-                            <p className="text-white/70 text-xs mt-1.5">保存が完了するまでこのまま少々お待ちください</p>
+                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/60 backdrop-blur-md animate-fade-in">
+                            <div className="relative flex flex-col items-center px-10 py-9 rounded-m3-3xl bg-white/10 border border-white/20 shadow-2xl animate-m3e-pop" style={{ boxShadow: '0 0 60px rgba(158, 202, 255, 0.25), 0 20px 60px rgba(0,0,0,0.4)' }}>
+                                <div className="relative w-16 h-16 flex items-center justify-center mb-4">
+                                    <span className="absolute w-24 h-24 rounded-full blur-[10px] opacity-60" style={{ background: 'conic-gradient(from 0deg, transparent 0%, #9ECAFF 15%, transparent 35%, transparent 65%, #EFB8C8 80%, transparent 100%)', animation: 'haloSpin 2.6s linear infinite' }}></span>
+                                    <div className="relative w-16 h-16 rounded-m3-2xl bg-gradient-to-br from-m3-primary to-blue-700 flex items-center justify-center shadow-xl overflow-hidden">
+                                        <M3Spinner size={30} className="text-white" />
+                                        <span className="absolute inset-0" style={{ background: 'linear-gradient(115deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0) 35%)', animation: 'splashShine 2.2s ease-in-out infinite' }}></span>
+                                    </div>
+                                </div>
+                                <p className="text-white text-base font-bold font-display tracking-tight">スプレッドシートに保存中...</p>
+                                <p className="text-white/70 text-xs mt-1.5">保存が完了するまでこのまま少々お待ちください</p>
+                            </div>
                         </div>
                     )}
 
