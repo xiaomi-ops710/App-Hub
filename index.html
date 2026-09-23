@@ -55,7 +55,7 @@
         // アプリのバージョン表示（起動アニメーションなどで使用）
         // 運用ルール: 更新のたびに上げる。大規模な変更はメジャー(例: 2.x→3.0)、
         // 小規模な変更はマイナー(例: 2.1→2.2)を上げる。
-        window.__APP_VERSION__ = '2.16.0';
+        window.__APP_VERSION__ = '2.18.0';
     </script>
     <meta name="theme-color" content="#0061A4">
     <meta name="mobile-web-app-capable" content="yes">
@@ -285,7 +285,7 @@
         const PENDING_QUEUE_KEY = 'm3_app_hub_pending_queue';
         // GASコードのバージョン。GAS_CODE_SNIPPET内のCODE_VERSIONと必ず同じ値に保つこと。
         // 一致しない場合、古いGASコードのまま（新しい項目が保存されない等の原因）と判断して警告を出す。
-        const EXPECTED_GAS_VERSION = 'v14-selfheal-testrows-2026-09';
+        const EXPECTED_GAS_VERSION = 'v15-pin-2026-09';
         const genOpId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         // --- GAS(Firebase連携)APIクライアント ---
@@ -429,6 +429,33 @@
             <svg className={`m3-spinner ${className}`} style={{ width: size, height: size }} viewBox="0 0 50 50">
                 <circle cx="25" cy="25" r="20" />
             </svg>
+        );
+
+        // メモの中の「- [ ] タスク」「- [x] 完了タスク」という行をチェックリストとして
+        // 認識し、クリックでチェックのon/offができるようにする。それ以外の行は普通のテキスト。
+        const MEMO_CHECKLIST_RE = /^(\s*)-\s\[( |x|X)\]\s?(.*)$/;
+        const MemoContent = ({ memo, onToggleLine, className = "" }) => (
+            <div className={className}>
+                {(memo || '').split('\n').map((line, i) => {
+                    const m = line.match(MEMO_CHECKLIST_RE);
+                    if (!m) return line.trim() === '' ? <div key={i} className="h-2"></div> : <div key={i}>{line}</div>;
+                    const checked = m[2].toLowerCase() === 'x';
+                    return (
+                        <button
+                            key={i}
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); onToggleLine && onToggleLine(i); }}
+                            disabled={!onToggleLine}
+                            className={`w-full flex items-start gap-2 text-left py-0.5 ${onToggleLine ? 'cursor-pointer hover:opacity-70' : ''}`}
+                        >
+                            <span className={`material-symbols-rounded text-base flex-shrink-0 mt-px ${checked ? 'fill' : ''}`}>
+                                {checked ? 'check_box' : 'check_box_outline_blank'}
+                            </span>
+                            <span className={checked ? 'line-through opacity-60' : ''}>{m[3] || '（空のタスク）'}</span>
+                        </button>
+                    );
+                })}
+            </div>
         );
 
         const AppIconDisplay = ({ type, imageUrl, iconName, iconBgColor, size = "md" }) => {
@@ -985,6 +1012,8 @@
                     default: // smart: favorites first, then newest
                         list.sort((a, b) => (b.isFavorite ? 1 : 0) - (a.isFavorite ? 1 : 0) || b.createdAt - a.createdAt);
                 }
+                // ピン留めした項目は、どの並び替えを選んでいても常に一番上に来るようにする
+                list.sort((a, b) => (b.isPinned ? 1 : 0) - (a.isPinned ? 1 : 0));
                 return list;
             }, [apps, searchQuery, selectedCategories, selectedIconFilter, sortBy]);
 
@@ -1005,6 +1034,38 @@
                 if (!target) return;
                 const updated = { ...target, isFavorite: !target.isFavorite };
                 setApps(prev => prev.map(a => a.id === id ? updated : a));
+                if (CloudApi.isEnabled()) {
+                    enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
+                    flushQueue({ force: true });
+                }
+            };
+
+            // ピン留め: 常に一覧の一番上に固定表示する（お気に入りより優先）
+            const handleTogglePin = (id, e) => {
+                if (e) e.stopPropagation();
+                const target = apps.find(a => a.id === id);
+                if (!target) return;
+                const updated = { ...target, isPinned: !target.isPinned };
+                setApps(prev => prev.map(a => a.id === id ? updated : a));
+                if (CloudApi.isEnabled()) {
+                    enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
+                    flushQueue({ force: true });
+                }
+            };
+
+            const handleToggleMemoChecklistLine = (appId, lineIndex, e) => {
+                if (e) e.stopPropagation();
+                const target = apps.find(a => a.id === appId);
+                if (!target || !target.memo) return;
+                const lines = target.memo.split('\n');
+                const line = lines[lineIndex];
+                if (line === undefined) return;
+                const m = line.match(MEMO_CHECKLIST_RE);
+                if (!m) return;
+                const nextChecked = m[2].toLowerCase() !== 'x';
+                lines[lineIndex] = `${m[1]}- [${nextChecked ? 'x' : ' '}] ${m[3]}`;
+                const updated = { ...target, memo: lines.join('\n') };
+                setApps(prev => prev.map(a => a.id === appId ? updated : a));
                 if (CloudApi.isEnabled()) {
                     enqueueSync({ opId: genOpId(), type: 'save', payload: updated });
                     flushQueue({ force: true });
@@ -1728,6 +1789,13 @@
                                                 <AppIconDisplay type={app.iconType} imageUrl={app.imageUrl} iconName={app.iconName} iconBgColor={app.iconBgColor} size={CARD_SIZE_CONFIG[cardSize].iconSize} />
                                                 <div className="flex items-center gap-1">
                                                     <button
+                                                        onClick={(e) => handleTogglePin(app.id, e)}
+                                                        className="p-1.5 text-m3-onSurfaceVariant hover:text-m3-primary rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors m3-bounce"
+                                                        title={app.isPinned ? "ピン留めを解除" : "一番上にピン留め"}
+                                                    >
+                                                        <span className={`material-symbols-rounded text-xl ${app.isPinned ? 'fill text-m3-primary rotate-0' : ''}`}>push_pin</span>
+                                                    </button>
+                                                    <button
                                                         onClick={(e) => handleToggleFavorite(app.id, e)}
                                                         className="p-1.5 text-m3-onSurfaceVariant hover:text-amber-500 rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors m3-bounce"
                                                         title={app.isFavorite ? "お気に入りから解除" : "お気に入りに追加"}
@@ -1780,16 +1848,16 @@
                                                 </div>
                                             </div>
 
-                                            <p className={`text-xs text-m3-onSurfaceVariant ${CARD_SIZE_CONFIG[cardSize].descLines} mb-4 leading-relaxed`}>
+                                            <p className={`text-xs text-m3-onSurfaceVariant bg-m3-surfaceContainerHighest/60 rounded-[20px] px-3.5 py-2.5 ${CARD_SIZE_CONFIG[cardSize].descLines} mb-4 leading-relaxed`}>
                                                 {app.description || '（説明文未設定）'}
                                             </p>
 
                                             {app.memo && expandedMemoIds.includes(app.id) && (
                                                 <div
                                                     onClick={(e) => e.stopPropagation()}
-                                                    className="mb-4 -mt-2 p-2.5 rounded-m3-l bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 text-xs whitespace-pre-wrap leading-relaxed"
+                                                    className="mb-4 -mt-2 p-2.5 rounded-m3-l bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 text-xs leading-relaxed"
                                                 >
-                                                    {app.memo}
+                                                    <MemoContent memo={app.memo} onToggleLine={(i) => handleToggleMemoChecklistLine(app.id, i)} className="whitespace-pre-wrap" />
                                                 </div>
                                             )}
                                         </div>
@@ -1884,7 +1952,7 @@
                                                         </span>
                                                     ))}
                                                 </div>
-                                                <p className="text-xs text-m3-onSurfaceVariant truncate mt-0.5">
+                                                <p className="inline-block max-w-full text-xs text-m3-onSurfaceVariant truncate mt-1 bg-m3-surfaceContainerHighest/60 rounded-full px-3 py-1">
                                                     {app.description || app.url}
                                                 </p>
                                             </div>
@@ -1917,6 +1985,13 @@
                                                 title="QRコードを表示"
                                             >
                                                 <span className="material-symbols-rounded text-lg">qr_code_2</span>
+                                            </button>
+                                            <button
+                                                onClick={(e) => handleTogglePin(app.id, e)}
+                                                className="p-2 text-m3-onSurfaceVariant hover:text-m3-primary rounded-m3-full hover:bg-m3-surfaceContainerHighest transition-colors m3-bounce"
+                                                title={app.isPinned ? "ピン留め解除" : "一番上にピン留め"}
+                                            >
+                                                <span className={`material-symbols-rounded text-lg ${app.isPinned ? 'fill text-m3-primary' : ''}`}>push_pin</span>
                                             </button>
                                             <button
                                                 onClick={(e) => handleToggleFavorite(app.id, e)}
@@ -1998,6 +2073,7 @@
                             onShowQr={() => setQrApp(detailApp)}
                             onShare={() => handleShareApp(detailApp)}
                             onCopy={() => copyToClipboard(detailApp.url, detailApp.title)}
+                            onToggleMemoLine={(i) => handleToggleMemoChecklistLine(detailApp.id, i)}
                         />
                     )}
 
@@ -2098,8 +2174,8 @@
 //    LockServiceによる排他制御を追加しました。
 
 const SHEET_NAME = 'Apps';
-const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'iconBgColor', 'cardColor', 'isFavorite', 'createdAt', 'updatedAt', 'lastOpenedAt', 'openCount'];
-const CODE_VERSION = 'v14-selfheal-testrows-2026-09';
+const HEADERS = ['id', 'title', 'url', 'editUrl', 'version', 'platform', 'description', 'memo', 'category', 'iconType', 'imageUrl', 'iconName', 'iconBgColor', 'cardColor', 'isFavorite', 'isPinned', 'createdAt', 'updatedAt', 'lastOpenedAt', 'openCount'];
+const CODE_VERSION = 'v15-pin-2026-09';
 
 // 見出し名の比較用に正規化する（前後の空白を除去し、小文字化する）。
 // これにより、スプレッドシート側の見出しセルが "ID" や " id " のように
@@ -2193,6 +2269,7 @@ function saveAppRow_(sheet, app) {
     if (h === 'id') rowValues[col] = id;
     else if (h === 'createdAt') rowValues[col] = createdAt;
     else if (h === 'isFavorite') rowValues[col] = !!app.isFavorite;
+    else if (h === 'isPinned') rowValues[col] = !!app.isPinned;
     else rowValues[col] = app[h] !== undefined ? app[h] : '';
   });
 
@@ -2227,6 +2304,7 @@ function doGet(e) {
         const obj = {};
         HEADERS.forEach(h => { obj[h] = headerMap[h] !== undefined ? row[headerMap[h]] : ''; });
         obj.isFavorite = (obj.isFavorite === true || String(obj.isFavorite).toLowerCase() === 'true');
+        obj.isPinned = (obj.isPinned === true || String(obj.isPinned).toLowerCase() === 'true');
         obj.createdAt = Number(obj.createdAt) || Date.now();
         obj.updatedAt = Number(obj.updatedAt) || obj.createdAt;
         obj.lastOpenedAt = Number(obj.lastOpenedAt) || 0;
@@ -2289,7 +2367,7 @@ function doPost(e) {
   }
 }`;
 
-        function AppDetailModal({ app, onClose, onOpenApp, onToggleFavorite, onEdit, onShowQr, onShare, onCopy }) {
+        function AppDetailModal({ app, onClose, onOpenApp, onToggleFavorite, onEdit, onShowQr, onShare, onCopy, onToggleMemoLine }) {
             const platform = getPlatform(app);
             return (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose}>
@@ -2325,7 +2403,7 @@ function doPost(e) {
                                 </div>
                             )}
 
-                            <p className="text-sm text-m3-onSurfaceVariant leading-relaxed whitespace-pre-wrap mb-5">
+                            <p className="text-sm text-m3-onSurfaceVariant leading-relaxed whitespace-pre-wrap mb-5 bg-m3-surfaceContainerHighest/60 rounded-[20px] px-4 py-3">
                                 {app.description || '（説明文未設定）'}
                             </p>
 
@@ -2335,8 +2413,8 @@ function doPost(e) {
                                         <span className="material-symbols-rounded text-base">edit_note</span>
                                         内部メモ
                                     </p>
-                                    <div className="p-3 rounded-m3-l bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 text-xs whitespace-pre-wrap leading-relaxed">
-                                        {app.memo}
+                                    <div className="p-3 rounded-m3-l bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 text-xs leading-relaxed">
+                                        <MemoContent memo={app.memo} onToggleLine={(i) => handleToggleMemoChecklistLine(app.id, i)} className="whitespace-pre-wrap" />
                                     </div>
                                 </div>
                             )}
@@ -2885,6 +2963,23 @@ function doPost(e) {
             const [cardColor, setCardColor] = useState(() => initialDraft?.cardColor ?? (editingApp?.cardColor || ''));
             const [iconBgColor, setIconBgColor] = useState(() => initialDraft?.iconBgColor ?? (editingApp?.iconBgColor || ''));
             const [memo, setMemo] = useState(() => initialDraft?.memo ?? (editingApp?.memo || ''));
+            const memoRef = useRef(null);
+            // 「+ チェックリスト項目」ボタン用: カーソル位置(または末尾)に "- [ ] " の行を挿入する
+            const insertChecklistLine = () => {
+                const el = memoRef.current;
+                const prefix = memo && !memo.endsWith('\n') ? '\n' : '';
+                const insertText = `${prefix}- [ ] `;
+                if (!el) {
+                    setMemo(memo + insertText);
+                    return;
+                }
+                const start = el.selectionStart ?? memo.length;
+                const end = el.selectionEnd ?? memo.length;
+                const next = memo.slice(0, start) + insertText + memo.slice(end);
+                setMemo(next);
+                const caret = start + insertText.length;
+                requestAnimationFrame(() => { el.focus(); el.setSelectionRange(caret, caret); });
+            };
             const [errors, setErrors] = useState({});
             const [draftRestored, setDraftRestored] = useState(!!initialDraft);
             const [activeTab, setActiveTab] = useState('basic'); // basic | appearance | details
@@ -3387,18 +3482,30 @@ function doPost(e) {
                                 </div>
 
                                 <div>
-                                    <label className="flex items-center gap-1.5 text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider mb-1.5">
-                                        <span className="material-symbols-rounded text-sm">edit_note</span>
-                                        内部メモ（自分用・任意）
-                                    </label>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <label className="flex items-center gap-1.5 text-xs font-bold text-m3-onSurfaceVariant uppercase tracking-wider">
+                                            <span className="material-symbols-rounded text-sm">edit_note</span>
+                                            内部メモ（自分用・任意）
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={insertChecklistLine}
+                                            className="flex items-center gap-1 px-2.5 py-1 rounded-m3-full bg-m3-primaryContainer text-m3-onPrimaryContainer text-[11px] font-bold m3-bounce"
+                                            title="カーソル位置にチェックリスト項目を挿入"
+                                        >
+                                            <span className="material-symbols-rounded text-sm">playlist_add_check</span>
+                                            チェックリスト項目
+                                        </button>
+                                    </div>
                                     <textarea
+                                        ref={memoRef}
                                         rows="6"
-                                        placeholder="バグ・TODO・次にやることなど、自分用の作業メモ"
+                                        placeholder={"バグ・TODO・次にやることなど、自分用の作業メモ\n「- [ ] タスク」と書くとチェックリストになります"}
                                         value={memo}
                                         onChange={(e) => setMemo(e.target.value)}
                                         className="w-full px-4 py-3 bg-m3-surface text-m3-onSurface rounded-m3-l focus:ring-2 focus:ring-m3-primary outline-none text-sm resize-y min-h-[8rem]"
                                     ></textarea>
-                                    <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ カードでは折りたたまれており、アイコンをタップした時だけ表示されます。</p>
+                                    <p className="text-[11px] text-m3-onSurfaceVariant/80 mt-1">※ カードでは折りたたまれており、アイコンをタップした時だけ表示されます。「- [ ] タスク」の行はカード上でチェックボックスとして操作できます。</p>
                                 </div>
                             </div>
                             )}
